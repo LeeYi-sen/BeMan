@@ -3,8 +3,8 @@
 set -Eeuo pipefail
 umask 077
 
-# 发布到自己的网站后填写，例如 https://example.com/beman（不含末尾/）。
-BASE_URL="${BEMAN_BASE_URL:-}"
+# 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
+BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
 PYTHON_SHA256="4ac019f5d2533b6adeb45bf10421bbf673a385f22da3b523f103f0d99e2de9c5"
 ROOT=/opt/beman
