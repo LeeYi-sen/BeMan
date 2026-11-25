@@ -58,21 +58,20 @@ sudoedit /opt/beman/settings.json
 
 示例地址须换成服务器实际看到的 SSH 来源 IP；空字符串会忽略，支持多个精确 IPv4/IPv6 地址，不支持 CIDR 网段。多个用户名与多个 IP 组成所有允许组合，并且仍须通过公钥认证。端口参数不会修改 SSH 监听端口。确认至少一个主用和一个备用管理通道可用。
 
-### 2.3 应用并确认
+### 2.3 启动防护
 
 ```bash
-sudo beman check
-sudo --preserve-env=SSH_CONNECTION beman apply
+sudo --preserve-env=SSH_CONNECTION beman start
 ```
 
-保留原连接，在白名单设备上以允许用户建立**新的 SSH 会话**，验证公钥登录成功后，在新会话执行：
+首次启用或白名单变更时，保留原连接，在白名单设备上以允许用户建立**新的 SSH 会话**，验证公钥登录成功后，在新会话再次执行 start 确认：
 
 ```bash
-sudo --preserve-env=SSH_CONNECTION beman confirm
+sudo --preserve-env=SSH_CONNECTION beman start
 sudo beman status
 ```
 
-默认 300 秒内未确认时，程序通过 systemd 定时任务尝试恢复应用前的 SSH 策略。不要依赖回滚作为唯一恢复途径，不要在确认前重启服务器。若新会话失败，可从原会话或本地控制台执行 `sudo beman rollback`。修改白名单后，重复 check、apply/reload、confirm。
+默认 300 秒内未确认时，程序通过 systemd 定时任务尝试恢复应用前的 SSH 策略。不要依赖回滚作为唯一恢复途径，不要在确认前重启服务器。若新会话失败，可从原会话或本地控制台执行 `sudo beman stop` 恢复原规则。修改白名单后，执行 restart 并从新会话再次执行 start。root 可直接使用 beman start/stop/restart/status；无须手动修改 enabled。
 
 ## 3. 安装结构
 
@@ -102,9 +101,9 @@ sudo beman status
 | `sudo --preserve-env=SSH_CONNECTION beman reload` | 重新应用 SSH 策略，仍需新会话确认 |
 | `sudo --preserve-env=SSH_CONNECTION beman confirm` | 从新的白名单会话确认待生效策略 |
 | `sudo beman rollback` | 恢复待确认策略；无待确认时撤销 BeMan SSH 策略 |
-| `sudo beman start` | 启动审计守护服务 |
-| `sudo beman stop` | 停止审计服务，不撤销已应用的策略 |
-| `sudo beman restart` | 重启守护服务 |
+| `sudo beman start` | 应用 SSH 防护并启动守护服务；新会话再次 start 确认 |
+| `sudo beman stop` | 解除网络隔离、撤销所有 BeMan SSH 策略、停止并禁用守护服务 |
+| `sudo beman restart` | 读取并应用配置、重启守护服务；规则变更需新会话确认 |
 | `sudo beman release` | 解除 BeMan 网络隔离，不解锁存储 |
 | `sudo beman isolate --authorized-incident` | 经授权执行限时网络隔离 |
 | `sudo beman lock-storage --authorized-incident` | 经授权正常卸载并关闭专用 LUKS 卷 |
@@ -118,7 +117,7 @@ sudo beman status
 
 | 字段 | 默认值 / 说明 |
 | --- | --- |
-| enabled | false；关闭不会撤销已经应用的防护 |
+| enabled | false；start/stop 自动维护，单独编辑不会撤销已经应用的防护 |
 | authentication.allowed_users | ["root"]；允许用户列表 |
 | authentication.allowed_ips | ["192.168.31.7", "", ""]；精确来源 IP 列表 |
 | authentication.ssh_port | 22；现有 SSH 端口 |
@@ -167,7 +166,7 @@ sudo tail -n 100 /opt/beman/logs/beman.log
 
 如果使用 `beman update`，先从可信发布渠道获得新版 SHA256，手动填写 update.python_url 和 update.sha256，再执行 `sudo beman update`、`sudo beman restart`。此命令不会自动接受远端新哈希；配置合并可通过 init 完成。再次运行安装器时已有更新参数也会保留。
 
-正常撤销防护可执行 `sudo beman release`、`sudo beman rollback`，需要停用服务时执行 `sudo beman uninstall`。单独 stop 或将 enabled 改为 false 不等于撤销防护。恢复网络不会自动重新挂载加密卷。
+日常仅需 start、stop、restart、status 四个命令。stop 恢复原 SSH 规则并解除 BeMan 网络隔离，但不改变其他防火墙或认证规则，也不会自动解锁加密卷。uninstall 同样停用防护并保留文件。旧版 apply、confirm 等命令仍保留用于兼容和故障排查。升级安装保留原服务启停状态。
 
 ## 8. 发布维护与安全边界
 

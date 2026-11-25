@@ -6,7 +6,7 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-PYTHON_SHA256="4ac019f5d2533b6adeb45bf10421bbf673a385f22da3b523f103f0d99e2de9c5"
+PYTHON_SHA256="c2b2f01ad85501f8e98ba920c1e31b90a6467fd0c88060d0266f49552a58188b"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -83,9 +83,19 @@ WantedBy=multi-user.target
 UNITFILE
 install -m 0644 -o root -g root "$TMP/beman.service" "$UNIT"
 systemctl daemon-reload
-systemctl enable beman.service
-systemctl restart beman.service
-systemctl is-active --quiet beman.service
+if [[ -f "$TMP/unit.old" ]]; then
+    if [[ "$was_enabled" == true ]]; then systemctl enable beman.service; else systemctl disable beman.service; fi
+    if [[ "$was_active" == true ]]; then
+        systemctl restart beman.service
+        systemctl is-active --quiet beman.service
+    else
+        systemctl stop beman.service
+    fi
+else
+    systemctl enable beman.service
+    systemctl restart beman.service
+    systemctl is-active --quiet beman.service
+fi
 trap - ERR
 printf '\nBeman已安装/更新：%s\n配置：%s/settings.json\n' "$ROOT" "$ROOT"
-printf '首次安装仅启动审计，不会自动改变SSH、防火墙或数据卷。\n请配置白名单并将enabled.value设为true，然后执行 beman apply；从新SSH会话执行 beman confirm。\n'
+printf '首次安装仅启动审计，不会自动改变SSH、防火墙或数据卷。\n请配置白名单，然后执行 beman start；首次启用或修改规则时，从新SSH会话再次执行 beman start 确认。停止防护使用 beman stop。\n'

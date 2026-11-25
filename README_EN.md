@@ -58,21 +58,20 @@ Settings use valid JSON with single-line `value + comment` entries and Chinese e
 
 Replace example addresses with source IPs actually observed by the server. Empty strings are ignored. Multiple exact IPv4/IPv6 addresses are supported, but CIDR ranges are not. Every listed user can authenticate from every listed IP, subject to public-key authentication. The port setting does not change SSH's listening port. Ensure both primary and backup administrative channels are available.
 
-### 2.3 Apply and confirm
+### 2.3 Start protection
 
 ```bash
-sudo beman check
-sudo --preserve-env=SSH_CONNECTION beman apply
+sudo --preserve-env=SSH_CONNECTION beman start
 ```
 
-Keep the existing session open. Establish a **new SSH session** from an allowed device using an allowed user, verify public-key login, and then run in the new session:
+On initial activation or after allowlist changes, keep the existing session open. Establish a **new SSH session** from an allowed device using an allowed user, verify public-key login, and run start again to confirm:
 
 ```bash
-sudo --preserve-env=SSH_CONNECTION beman confirm
+sudo --preserve-env=SSH_CONNECTION beman start
 sudo beman status
 ```
 
-If not confirmed within 300 seconds by default, a systemd timer attempts to restore the previous SSH policy. Do not rely on rollback as the only recovery channel or reboot before confirmation. If the new session fails, run `sudo beman rollback` from the original session or local console. Repeat check, apply/reload and confirm after allowlist changes.
+If not confirmed within 300 seconds by default, a systemd timer attempts to restore the previous SSH policy. Do not rely on rollback as the only recovery channel or reboot before confirmation. If the new session fails, run `sudo beman stop` from the original session or local console. After allowlist changes, run restart and then start from a new session. Root can run beman start/stop/restart/status directly; no manual enabled toggle is needed.
 
 ## 3. Installation layout
 
@@ -102,9 +101,9 @@ Server-side commands require root privileges. Examples use sudo; root can omit i
 | `sudo --preserve-env=SSH_CONNECTION beman reload` | Reapply SSH policy; confirmation in a new session is still required |
 | `sudo --preserve-env=SSH_CONNECTION beman confirm` | Confirm pending policy from a new allowed session |
 | `sudo beman rollback` | Restore pending policy, or remove BeMan SSH policy if none is pending |
-| `sudo beman start` | Start the audit daemon |
-| `sudo beman stop` | Stop auditing without removing applied policies |
-| `sudo beman restart` | Restart the daemon |
+| `sudo beman start` | Apply SSH protection and start the daemon; run again from a new session to confirm |
+| `sudo beman stop` | Release isolation, remove all BeMan SSH policies, stop and disable the daemon |
+| `sudo beman restart` | Reload settings, apply policy and restart daemon; confirm changed rules in a new session |
 | `sudo beman release` | Release BeMan network isolation without unlocking storage |
 | `sudo beman isolate --authorized-incident` | Perform authorized, time-limited network isolation |
 | `sudo beman lock-storage --authorized-incident` | Normally unmount and close authorized dedicated LUKS volumes |
@@ -118,7 +117,7 @@ Internal commands `monitor` and `rollback-pending` are used by the service and r
 
 | Field | Default / meaning |
 | --- | --- |
-| enabled | false; disabling does not remove applied protection |
+| enabled | false; managed by start/stop; editing alone does not remove applied protection |
 | authentication.allowed_users | ["root"]; allowed users |
 | authentication.allowed_ips | ["192.168.31.7", "", ""]; exact source addresses |
 | authentication.ssh_port | 22; existing SSH port |
@@ -167,7 +166,7 @@ sudo tail -n 100 /opt/beman/logs/beman.log
 
 For `beman update`, obtain the new SHA256 from a trusted release channel, set update.python_url and update.sha256, then run `sudo beman update` and `sudo beman restart`. It does not automatically trust a new remote checksum. Use init to merge configuration fields if needed. Rerunning the installer also preserves existing update settings.
 
-To remove protection, use `sudo beman release` and `sudo beman rollback`; use `sudo beman uninstall` to disable the service as well. Stopping the service or setting enabled to false is not equivalent to removing protection. Releasing networking does not remount encrypted storage.
+For everyday use, only start, stop, restart and status are needed. Stop restores the original SSH policy and releases BeMan isolation without modifying other firewall or authentication rules; it does not unlock encrypted volumes. Uninstall also stops protection while retaining files. Legacy apply and confirm remain available for compatibility and troubleshooting. Installer upgrades preserve the previous service activation state.
 
 ## 8. Publishing and security boundaries
 

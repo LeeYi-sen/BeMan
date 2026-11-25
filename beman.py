@@ -38,7 +38,7 @@ def item(value, comment):
 
 
 DEFAULTS = {
-    'enabled': item(False, '总开关：true允许应用SSH防护及授权响应，false仅审计；关闭不会自动撤销已经应用的策略，请先执行rollback。'),
+    'enabled': item(False, '总开关：由beman start/stop自动管理；直接修改此值不会应用或撤销SSH策略。'),
     'authentication': {
         'allowed_users': item(['root'], '允许SSH登录的本地用户列表；每个用户与白名单中所有IP组合匹配。'),
         'allowed_ips': item(['192.168.31.7', '', ''], '主IP及备用IP，支持任意数量的精确IPv4/IPv6地址，空值忽略，不支持网段。'),
@@ -341,7 +341,7 @@ class SSHGuard:
             cls.verify(c); run('systemctl','reload',SSH_SERVICE)
         except Exception:
             cls.restore_pending(); raise
-        print('SSH策略已应用。保留当前会话，从白名单IP新建SSH连接后执行 beman confirm；超时自动回滚。')
+        print('SSH策略已应用。保留当前会话，从白名单IP新建SSH连接后执行 beman start（或 confirm）；超时自动回滚。')
 
     @classmethod
     def confirm(cls):
@@ -504,15 +504,94 @@ class LoginMonitor:
 
 class Beman:
     @staticmethod
+    def set_enabled(value):
+        data=ConfigManager.merge(DEFAULTS,read(SETTINGS))
+        data['enabled']['value']=value
+        atomic(SETTINGS,ConfigManager.format(data)+'\n')
+
+    @classmethod
+    def start(cls,restart=False):
+        with locked():
+            c=ConfigManager.load(); c['enabled']=True
+            candidate=SSHGuard.candidate(c)
+            old=SSHGuard.owned()
+            pending=SSHGuard.PENDING.exists()
+            need(old==candidate or not NetworkGuard.OWN.exists(),'网络隔离期间不能修改SSH白名单，请先执行beman stop或release')
+            created=False
+            try:
+                if pending:
+                    need(old==candidate,'待确认期间配置已变化，请先执行beman stop或rollback')
+                    SSHGuard.verify(c)
+                elif old==candidate:
+                    SSHGuard.inspect(); SSHGuard.verify(c)
+                else:
+                    SSHGuard.apply(c); created=True
+                run('systemctl','enable','--now',SERVICE)
+                if restart:
+                    run('systemctl','restart',SERVICE)
+                if pending:
+                    SSHGuard.confirm()
+                cls.set_enabled(True)
+            except Exception:
+                if created and SSHGuard.PENDING.exists():
+                    SSHGuard.restore_pending()
+                raise
+            if SSHGuard.PENDING.exists():
+                print('防护已临时启用；请保留当前会话，从白名单IP新建SSH连接后再次执行 beman start 确认，超时自动回滚。')
+            else:
+                print('Beman防护已启用。')
+
+    @classmethod
+    def stop(cls):
+        with locked():
+            # Restore the original rules even if apply was updating an older confirmed policy.
+            errors=[]
+            try:
+                NetworkGuard.release()
+            except Exception as e:
+                errors.append('解除网络隔离失败：'+str(e))
+            try:
+                SSHGuard.rollback()
+                if POLICY.exists(): SSHGuard.rollback()
+                need(not POLICY.exists() and not SSHGuard.PENDING.exists(),'SSH策略仍存在')
+            except Exception as e:
+                errors.append('撤销SSH策略失败：'+str(e))
+            need(not errors,'；'.join(errors)+'；守护服务保留，请检查后重试stop')
+            run('systemctl','disable','--now',SERVICE)
+            try:
+                cls.set_enabled(False)
+            except (OSError,ValueError,KeyError,BemanError) as e:
+                print('防护已停止，但配置开关写入失败：'+str(e),file=sys.stderr)
+            print('Beman防护已停止，已恢复原SSH规则；不会自动解锁加密数据卷。')
+
+    @staticmethod
     def status():
-        c=ConfigManager.load()
-        print('总开关：',c['enabled'])
-        print('白名单：',c['authentication']['allowed_users'],c['authentication']['allowed_ips'])
-        print('SSH策略：', '存在' if POLICY.exists() else '未应用')
-        print('待确认：',SSHGuard.PENDING.exists())
+        service=run('systemctl','is-active',SERVICE,check=False).stdout.strip()
+        pending=SSHGuard.PENDING.exists()
+        try:
+            c=ConfigManager.load()
+            if POLICY.exists():
+                owned=SSHGuard.owned()
+                need(owned==SSHGuard.candidate(c),'当前策略与配置不一致，请重新启动防护')
+                SSHGuard.inspect(); SSHGuard.verify(c)
+                policy='待确认（临时生效）' if pending else '已应用'
+            else:
+                policy='未应用'
+            if pending: state='待确认'
+            elif policy=='已应用' and service=='active' and c['enabled']: state='运行中'
+            elif policy=='未应用' and not NetworkGuard.OWN.exists(): state='未启动（仅审计）' if service=='active' else '已停止'
+            else: state='部分生效 / 请检查'
+            print('防护状态：',state)
+            print('总开关：',c['enabled'])
+            print('白名单：',c['authentication']['allowed_users'],c['authentication']['allowed_ips'])
+            print('SSH策略：',policy)
+            print('存储卷：',[(v['name'],(Path('/dev/mapper')/v['name']).exists()) for v in c['encrypted_storage']['volumes']])
+        except (OSError,ValueError,KeyError,BemanError) as e:
+            print('防护状态：异常；',str(e))
+            print('SSH策略文件：','存在' if POLICY.exists() else '不存在')
+        print('待确认：',pending)
         print('隔离状态记录：',NetworkGuard.OWN.exists())
-        print('守护服务：',run('systemctl','is-active',SERVICE,check=False).stdout.strip())
-        print('存储卷：',[(v['name'],(Path('/dev/mapper')/v['name']).exists()) for v in c['encrypted_storage']['volumes']])
+        print('守护服务：',service)
 
     @staticmethod
     def respond(c):
@@ -555,12 +634,12 @@ class Beman:
             logging.basicConfig(filename=ROOT/'logs/beman.log',level=logging.WARNING,format='%(asctime)s %(message)s'); LoginMonitor.watch(); return
         if op=='check':
             ConfigManager.load(); print('配置有效'); return
-        if op in ('start','stop','restart'):
-            run('systemctl',op,SERVICE); return
+        if op in ('start','restart'):
+            cls.start(restart=op=='restart'); return
+        if op=='stop':
+            cls.stop(); return
         if op=='uninstall':
-            with locked():
-                NetworkGuard.release(); SSHGuard.rollback()
-            run('systemctl','disable','--now',SERVICE); print('服务已停用且策略已恢复；保留/opt/beman、配置及日志供审计。'); return
+            cls.stop(); print('保留/opt/beman、配置及日志供审计。'); return
         with locked():
             if op=='init': ConfigManager.init(args.url,args.sha256); print('配置已生成/合并：'+str(SETTINGS)); return
             if op=='rollback-pending': SSHGuard.restore_pending(); return
