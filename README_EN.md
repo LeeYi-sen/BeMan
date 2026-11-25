@@ -1,0 +1,176 @@
+# BeMan
+
+**Linux SSH access protection and reversible incident response**
+
+[简体中文](README.md) · [GitHub](https://github.com/LeeYi-sen/BeMan) · [Official installer](https://beman.teadan.com/install.sh)
+
+BeMan combines a Bash installer with a standard-library Python program for SSH user/IP allowlisting, successful-authentication auditing, policy rollback, authorized network isolation and dedicated LUKS volume locking. It runs as a systemd service without Docker or third-party Python packages.
+
+> Important: a fresh installation starts auditing only; it does not enforce SSH restrictions automatically. Keep a local console or independent recovery channel available and test on a disposable server first. Syntax, configuration and mocked integration tests have passed. Real Ubuntu/systemd, nftables and LUKS end-to-end acceptance testing is still outstanding.
+
+## 1. Requirements
+
+- Target: Ubuntu 22.04/24.04 or compatible Debian Linux with running systemd.
+- Root or sudo privileges, Python 3.10+, OpenSSH Server (`ssh.service`) and preconfigured administrative public keys.
+- Bash, wget, CA certificates, coreutils, util-linux and systemd. Network isolation requires nftables; volume locking requires cryptsetup and existing dedicated LUKS volumes; the independent controller requires an SSH client and iproute2.
+- Standard SSH Include at `/etc/ssh/sshd_config.d/*.conf`. Existing Match, AllowUsers, DenyUsers, AllowGroups or DenyGroups rules require manual review; BeMan refuses automatic application in these cases.
+
+Example dependencies for Ubuntu/Debian (install optional packages as needed):
+
+```bash
+sudo apt update
+sudo apt install -y python3 openssh-server openssh-client wget ca-certificates coreutils util-linux
+# Optional
+sudo apt install -y nftables cryptsetup iproute2
+```
+
+## 2. Deployment
+
+### 2.1 Download and install
+
+Download and inspect the installer and its provenance before executing it as root.
+
+```bash
+wget --https-only -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+```
+
+The installer downloads beman.py from the official domain, checks its pinned SHA256 and syntax, creates or merges settings, registers and starts beman.service. A failed checksum prevents installation of the downloaded program. Protection is disabled by default on fresh installations.
+
+### 2.2 Configure the allowlist
+
+```bash
+sudoedit /opt/beman/settings.json
+```
+
+Settings use valid JSON with single-line `value + comment` entries and Chinese explanations. Edit only the value fields. The following is a partial example; edit the corresponding entries in the generated file rather than replacing the entire file.
+
+```json
+{
+    "enabled": {"value": true, "comment": "总防护开关"},
+    "authentication": {
+        "allowed_users": {"value": ["root"], "comment": "允许SSH登录的用户"},
+        "allowed_ips": {"value": ["192.168.31.7", "192.168.31.10", "192.168.31.11"], "comment": "主IP及备用IP"},
+        "ssh_port": {"value": 22, "comment": "现有SSH端口"},
+        "public_key_only": {"value": true, "comment": "强制公钥认证"}
+    }
+}
+```
+
+Replace example addresses with source IPs actually observed by the server. Empty strings are ignored. Multiple exact IPv4/IPv6 addresses are supported, but CIDR ranges are not. Every listed user can authenticate from every listed IP, subject to public-key authentication. The port setting does not change SSH's listening port. Ensure both primary and backup administrative channels are available.
+
+### 2.3 Apply and confirm
+
+```bash
+sudo beman check
+sudo --preserve-env=SSH_CONNECTION beman apply
+```
+
+Keep the existing session open. Establish a **new SSH session** from an allowed device using an allowed user, verify public-key login, and then run in the new session:
+
+```bash
+sudo --preserve-env=SSH_CONNECTION beman confirm
+sudo beman status
+```
+
+If not confirmed within 300 seconds by default, a systemd timer attempts to restore the previous SSH policy. Do not rely on rollback as the only recovery channel or reboot before confirmation. If the new session fails, run `sudo beman rollback` from the original session or local console. Repeat check, apply/reload and confirm after allowlist changes.
+
+## 3. Installation layout
+
+```text
+/opt/beman/
+├── beman.py
+├── settings.json
+├── backups/       # Policy state, rollback records and operation lock
+└── logs/
+    └── beman.log  # Authentication audit log, when file logging is enabled
+
+/usr/local/bin/beman                          # Command symlink
+/etc/systemd/system/beman.service             # Daemon service
+/etc/ssh/sshd_config.d/00-beman.conf           # SSH policy generated after apply
+```
+
+## 4. Command reference
+
+Server-side commands require root privileges. Examples use sudo; root can omit it. Preserve SSH_CONNECTION when applying, reloading or confirming policies over SSH.
+
+| Command | Purpose |
+| --- | --- |
+| `sudo beman status` | Show settings, allowlist, policy and service state |
+| `sudo beman check` | Validate settings without applying SSH policy |
+| `sudo beman init` | Generate or merge settings, preserving values and updating Chinese comments |
+| `sudo --preserve-env=SSH_CONNECTION beman apply` | Apply SSH allowlist and schedule rollback |
+| `sudo --preserve-env=SSH_CONNECTION beman reload` | Reapply SSH policy; confirmation in a new session is still required |
+| `sudo --preserve-env=SSH_CONNECTION beman confirm` | Confirm pending policy from a new allowed session |
+| `sudo beman rollback` | Restore pending policy, or remove BeMan SSH policy if none is pending |
+| `sudo beman start` | Start the audit daemon |
+| `sudo beman stop` | Stop auditing without removing applied policies |
+| `sudo beman restart` | Restart the daemon |
+| `sudo beman release` | Release BeMan network isolation without unlocking storage |
+| `sudo beman isolate --authorized-incident` | Perform authorized, time-limited network isolation |
+| `sudo beman lock-storage --authorized-incident` | Normally unmount and close authorized dedicated LUKS volumes |
+| `sudo beman respond --authorized-incident` | Run enabled incident-response modules |
+| `sudo beman update` | Verify and replace Python program using configured URL and trusted SHA256 |
+| `sudo beman uninstall` | Release isolation, restore SSH policy and disable service; retain program, settings and logs |
+
+Internal commands `monitor` and `rollback-pending` are used by the service and rollback timer; normally they need not be run manually. See `beman --help` for all arguments.
+
+## 5. Configuration reference
+
+| Field | Default / meaning |
+| --- | --- |
+| enabled | false; disabling does not remove applied protection |
+| authentication.allowed_users | ["root"]; allowed users |
+| authentication.allowed_ips | ["192.168.31.7", "", ""]; exact source addresses |
+| authentication.ssh_port | 22; existing SSH port |
+| authentication.public_key_only | true; must remain true |
+| network_isolation.enabled | true; permits authorized isolation |
+| network_isolation.preserve_whitelist | true; must remain true |
+| network_isolation.auto_release_minutes | 10; 1–60 minutes |
+| encrypted_storage.enabled | false; optional |
+| encrypted_storage.volumes | []; existing dedicated LUKS mappings and mount points |
+| external_controller.enabled | false; configure on a separate controller |
+| external_controller.allowed_ips | []; inherit SSH allowlist when empty, otherwise a subset |
+| external_controller.server_ip | ""; exact protected server IP |
+| external_controller.login_user | "root"; target SSH user |
+| external_controller.ssh_key | ""; existing absolute private-key path; empty uses SSH defaults |
+| protection.rollback_seconds | 300; 60–900 seconds |
+| protection.logging | true; file logging; disabling may still leave system journal messages |
+| update.python_url | Populated from download URL on first installation |
+| update.sha256 | Populated with trusted checksum on first installation |
+
+## 6. Incident response and independent controller
+
+Network isolation creates a separate nftables table, retaining allowlisted SSH, loopback and necessary IPv6 neighbor discovery traffic. Other network services, including Docker forwarding, may be interrupted. Confirm the SSH policy first and use isolation only for authorized incidents. By default a timer attempts to release it after ten minutes; release can restore networking earlier.
+
+Storage locking is limited to previously configured dedicated LUKS data volumes. It does not format disks, delete data or keys, or force unmounts. Busy volumes or additional mounts may cause refusal; a multi-volume operation can partially succeed. An administrator must manually unlock, mount and restore affected applications using the original procedure.
+
+Run the independent controller on a separate trusted Linux device. Configure its external_controller target, source IPs, user and existing SSH key, and verify the target host key in advance. The protected server must have BeMan installed and allow the controller's source address and user; non-root target users need appropriate non-interactive sudo permissions.
+
+| Controller command | Purpose |
+| --- | --- |
+| `sudo beman controller status` | Query target status |
+| `sudo beman controller release --authorized-incident` | Request authorized release of target isolation |
+| `sudo beman controller respond --authorized-incident` | Request authorized combined response |
+
+The controller also supports isolate and lock-storage. The controller-event command is an internal interface for a trusted local root audit integration, not a public API. An independent trusted event source must be supplied separately; BeMan does not automatically provision an external audit pipeline. Its SSH monitor logs successful authentication and allowlist anomalies; ordinary failed logins do not trigger host isolation.
+
+## 7. Updates, logs and recovery
+
+The recommended update method is to download and run the latest installer. Existing configuration values are preserved. Confirm pending SSH changes and release isolation before updating.
+
+```bash
+wget --https-only -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+sudo beman status
+sudo journalctl -u beman.service -n 100 --no-pager
+sudo tail -n 100 /opt/beman/logs/beman.log
+```
+
+For `beman update`, obtain the new SHA256 from a trusted release channel, set update.python_url and update.sha256, then run `sudo beman update` and `sudo beman restart`. It does not automatically trust a new remote checksum. Use init to merge configuration fields if needed. Rerunning the installer also preserves existing update settings.
+
+To remove protection, use `sudo beman release` and `sudo beman rollback`; use `sudo beman uninstall` to disable the service as well. Stopping the service or setting enabled to false is not equivalent to removing protection. Releasing networking does not remount encrypted storage.
+
+## 8. Publishing and security boundaries
+
+The main branch is published by GitHub Pages at https://beman.teadan.com . Whenever beman.py changes, update PYTHON_SHA256 in install.sh and verify the two published downloads match. Never commit live settings.json, private keys, audit logs or backups to the public repository.
+
+BeMan is not an absolute intrusion-prevention or data-security guarantee. It governs the configured SSH service, not local consoles or other remote entry points. Source IP is not a device identity; an attacker with root privileges can potentially bypass local policies. The external controller still depends on target SSH and does not independently control a switch or out-of-band hardware. Use upstream firewalls, independent backups and out-of-band recovery as complementary controls. SHA256 validation does not replace trust in the installer and release channel themselves.
