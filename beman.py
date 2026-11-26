@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import http.client
 import ipaddress
 import json
 import datetime
@@ -19,7 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '1'
+VERSION = '1.1'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -27,6 +28,7 @@ POLICY = Path('/etc/ssh/sshd_config.d/00-beman.conf')
 SSHD = '/usr/sbin/sshd'
 SSH_SERVICE = 'ssh.service'
 ROLLBACK = 'beman-ssh-rollback'
+ROLLBACK_SECONDS = 300
 SELF = ROOT / 'beman.py'
 BIN = Path('/usr/local/bin/beman')
 INSTALL_LOCK = Path('/run/lock/beman-install.lock')
@@ -39,8 +41,6 @@ def item(value, comment):
 DEFAULTS = {
     'allowed_users': item(['root'], '允许SSH登录的用户列表，必须使用公钥认证。'),
     'allowed_ips': item(['192.168.31.7', '', ''], '允许SSH登录的精确IPv4/IPv6地址，空值忽略。'),
-    'ssh_port': item(22, '现有SSH端口，不改变监听端口。'),
-    'rollback_seconds': item(300, '新策略未确认时自动回滚的秒数，60至900。'),
 }
 
 
@@ -107,14 +107,16 @@ class ConfigManager:
     @staticmethod
     def merge(schema, old):
         need(isinstance(old, dict), '配置必须是JSON对象')
-        # Migrate only the four retained fields; never silently replace a legacy allowlist.
+        # Preserve existing allowlists while dropping obsolete manual settings.
         if 'authentication' in old:
             need(not set(old).intersection(schema),'混合新旧配置格式，请人工检查')
             auth=old['authentication']; protection=old.get('protection',{})
             need(isinstance(auth,dict) and isinstance(protection,dict),'旧配置格式无效')
             need('allowed_users' in auth and 'allowed_ips' in auth,'旧白名单缺失，拒绝迁移')
-            old={k:auth[k] for k in ('allowed_users','allowed_ips','ssh_port') if k in auth}
-            if 'rollback_seconds' in protection: old['rollback_seconds']=protection['rollback_seconds']
+            old={k:auth[k] for k in ('allowed_users','allowed_ips')}
+        elif old:
+            need(set(schema)<=set(old),'白名单配置缺失，拒绝恢复默认值')
+            old={k:v for k,v in old.items() if k not in ('ssh_port','rollback_seconds')}
         need(not set(old)-set(schema),'存在未知配置字段')
         result={}
         for k,v in schema.items():
@@ -153,8 +155,6 @@ class ConfigManager:
         need(isinstance(c['allowed_users'],list) and c['allowed_users'] and all(user_valid(u) for u in c['allowed_users']),'用户名白名单无效')
         c['allowed_users']=list(dict.fromkeys(c['allowed_users']))
         c['allowed_ips']=ips(c['allowed_ips'])
-        for k,lo,hi in [('ssh_port',1,65535),('rollback_seconds',60,900)]:
-            need(type(c[k]) is int and lo<=c[k]<=hi,f'{k}须为{lo}至{hi}的整数')
 
 
 @contextlib.contextmanager
@@ -205,6 +205,36 @@ class SSHGuard:
     PENDING = STATE/'ssh-pending.json'
 
     @staticmethod
+    def ports():
+        # The fourth SSH_CONNECTION field is the real server-side session port.
+        conn=os.environ.get('SSH_CONNECTION','').split()
+        if len(conn)==4 and conn[3].isdigit() and 1<=int(conn[3])<=65535:
+            return conn[3]+'（当前SSH连接）'
+        # At a local console, prefer live sshd listeners; otherwise label config only.
+        try:
+            output=run('ss','-ltnpH').stdout
+            ports=set()
+            for line in output.splitlines():
+                fields=line.split()
+                if len(fields)>=6 and re.search(r'"sshd(?:-session)?"',line):
+                    port=fields[3].rsplit(':',1)[-1]
+                    if port.isdigit() and 1<=int(port)<=65535: ports.add(int(port))
+            if ports: return ', '.join(map(str,sorted(ports)))+'（实际监听）'
+        except (BemanError,OSError):
+            pass
+        try:
+            if run('systemctl','is-active','--quiet','ssh.socket',check=False).returncode==0:
+                output=run('systemctl','show','ssh.socket','--property=Listen','--value').stdout
+                ports={int(p) for p in re.findall(r':([0-9]+)\s+\(Stream\)',output) if 1<=int(p)<=65535}
+                if ports: return ', '.join(map(str,sorted(ports)))+'（SSH socket）'
+            output=run(SSHD,'-T').stdout
+            ports={int(p) for p in re.findall(r'^port ([0-9]+)$',output,re.M) if 1<=int(p)<=65535}
+            if ports: return ', '.join(map(str,sorted(ports)))+'（配置端口，实际监听未确认）'
+        except (BemanError,OSError):
+            pass
+        return '未检测到'
+
+    @staticmethod
     def pattern(c):
         a=c
         return [f'{u}@{ip}/{ipaddress.ip_address(ip).max_prefixlen}' for u in a['allowed_users'] for ip in a['allowed_ips']]
@@ -242,11 +272,10 @@ class SSHGuard:
                 out=run(SSHD,'-T','-C',f'user={u},host={ip},addr={ip}').stdout
                 lines=out.splitlines(); actual={x for l in lines if l.startswith('allowusers ') for x in l.split()[1:]}
                 need(actual==expected,'实际SSH白名单与配置不一致')
-                for x in ('pubkeyauthentication yes','authenticationmethods publickey','passwordauthentication no','kbdinteractiveauthentication no',f"port {a['ssh_port']}"):
+                for x in ('pubkeyauthentication yes','authenticationmethods publickey','passwordauthentication no','kbdinteractiveauthentication no'):
                     need(x in lines,'SSH实际配置不符合预期：'+x)
                 root_values={'permitrootlogin prohibit-password','permitrootlogin without-password'} if 'root' in a['allowed_users'] else {'permitrootlogin no'}
                 need(bool(root_values.intersection(lines)),'root认证策略不一致')
-                need(set(l for l in lines if l.startswith('port '))=={f"port {a['ssh_port']}"},'存在额外SSH监听端口，请人工审查')
 
     @classmethod
     def owned(cls):
@@ -283,7 +312,7 @@ class SSHGuard:
         cls.inspect(); run(SSHD,'-t'); old=cls.owned(); candidate=cls.candidate(c)
         token=secrets.token_hex(16)
         dump(cls.PENDING,{'token':token,'previous':old,'candidate_hash':sha(candidate),'connection':conn,'users':a['allowed_users'],'ips':a['allowed_ips']})
-        try: timer(ROLLBACK,c['rollback_seconds'],'rollback-pending',token)
+        try: timer(ROLLBACK,ROLLBACK_SECONDS,'rollback-pending',token)
         except Exception:
             cls.PENDING.unlink(); raise
         try:
@@ -365,7 +394,7 @@ class Release:
     @classmethod
     def fetch(cls,url):
         req=urllib.request.Request(url,headers={'Cache-Control':'no-cache','User-Agent':'BeMan-Updater'})
-        with urllib.request.build_opener(NoRedirect()).open(req,timeout=20) as response:
+        with urllib.request.build_opener(NoRedirect()).open(req,timeout=5) as response:
             need(response.geturl()==url,'更新地址发生重定向，拒绝继续')
             data=response.read(cls.MAX_SIZE+1)
         need(0<len(data)<=cls.MAX_SIZE,'发布文件为空或过大')
@@ -392,15 +421,17 @@ class Release:
         return installer,digest,local_version,published
 
     @classmethod
-    def update(cls,check_only=False):
-        Console.say('正在检测官方发布…')
+    def update(cls,check_only=False,quiet=False):
+        if not quiet: Console.say('正在检测官方发布…')
         installer,digest,local,published=cls.inspect()
-        print('本地版本：'+local)
-        print('最新版本：'+published)
+        if not quiet or published!=local:
+            print('本地版本：'+local)
+            print('最新版本：'+published)
         if cls.version_key(published)<cls.version_key(local):
             Console.say('发布版本低于本地版本，拒绝自动降级','warn'); return False
         if published==local:
-            Console.say('已是最新版本','ok'); return False
+            if not quiet: Console.say('已是最新版本','ok')
+            return False
         Console.say('发现新版本 '+published,'warn')
         if check_only: return False
         need(not SSHGuard.PENDING.exists(),'请先确认或停止SSH策略')
@@ -425,57 +456,72 @@ class Toolbox:
 
     @classmethod
     def whitelist(cls):
-        fields=[('allowed_users','允许用户'),('allowed_ips','允许IP'),('ssh_port','SSH端口'),('rollback_seconds','回滚秒数')]
-        with locked():
-            original=SETTINGS.read_text()
-            data=ConfigManager.merge(DEFAULTS,json.loads(original))
         while True:
+            with locked():
+                original=SETTINGS.read_text()
+                data=ConfigManager.merge(DEFAULTS,json.loads(original))
+                c=ConfigManager.unwrap(data); ConfigManager.validate(c)
             Console.title('白名单管理')
-            for i,(key,label) in enumerate(fields,1):
-                print(f'[{i}] {label}: {json.dumps(data[key]["value"],ensure_ascii=False)}')
-            print('[s] 保存  [0] 返回（放弃未保存修改）')
+            for key,label in [('allowed_users','用户白名单'),('allowed_ips','IP 白名单')]:
+                print(label+'：')
+                for i,value in enumerate(c[key],1): print(f'  {i}. {value}')
+            print('[1] 添加 IP\n[2] 删除 IP\n[3] 添加用户\n[4] 删除用户\n[0] 返回主菜单')
             choice=Console.ask('请选择：')
             if choice=='0': return
-            if choice.lower()=='s':
-                try:
-                    with locked():
-                        need(SETTINGS.read_text()==original,'配置已改变，请重新进入菜单')
-                        need(not SSHGuard.PENDING.exists(),'请先确认或停止待确认策略')
-                        ConfigManager.validate(ConfigManager.unwrap(data))
-                        atomic(SETTINGS,ConfigManager.format(data)+'\n')
-                    Console.say('已保存；选择重启防护应用新规则','ok')
-                    return
-                except (BemanError,ValueError,OSError,KeyError) as e: Console.say(str(e),'error')
-                continue
             if choice not in ('1','2','3','4'):
                 Console.say('无效选项','warn'); continue
-            key,label=fields[int(choice)-1]
-            raw=Console.ask('输入新值（名单用空格或逗号分隔，空行取消）：')
+            key='allowed_ips' if choice in ('1','2') else 'allowed_users'
+            adding=choice in ('1','3')
+            raw=Console.ask('输入要添加的'+('IP' if key=='allowed_ips' else '用户名')+'（空行取消）：' if adding else '输入要删除的编号（空行取消）：')
             if not raw: continue
             try:
-                data[key]['value']=list(dict.fromkeys(re.split(r'[\s,]+',raw))) if key in ('allowed_users','allowed_ips') else int(raw)
-            except ValueError as e: Console.say(str(e),'error')
+                if adding:
+                    value=ips([raw])[0] if key=='allowed_ips' else raw
+                    need(value not in c[key],'已存在于白名单')
+                    if key=='allowed_users':
+                        need(user_valid(value),'用户名无效')
+                        try: pwd.getpwnam(value)
+                        except KeyError: raise BemanError('系统中不存在该用户')
+                    c[key].append(value)
+                else:
+                    need(raw.isdecimal() and 1<=int(raw)<=len(c[key]),'无效编号')
+                    need(len(c[key])>1,'至少保留一个白名单成员')
+                    c[key].pop(int(raw)-1)
+                ConfigManager.validate(c)
+                with locked():
+                    need(SETTINGS.read_text()==original,'配置已改变，请重新操作')
+                    need(not SSHGuard.PENDING.exists(),'请先确认或停止待确认策略')
+                    for k,v in c.items(): data[k]['value']=v
+                    old=SSHGuard.owned()
+                    atomic(SETTINGS,ConfigManager.format(data)+'\n')
+                Console.say('白名单已保存','ok')
+                if old is not None: Console.say('选择重启防护应用新规则，并从新SSH会话确认','warn')
+            except (BemanError,ValueError,OSError,KeyError) as e: Console.say(str(e),'error')
 
     @classmethod
-    def menu(cls):
+    def menu(cls,skip_auto_update=False):
         need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
+        if not skip_auto_update and not SSHGuard.PENDING.exists():
+            try:
+                if Release.update(quiet=True):
+                    sys.stdout.flush(); sys.stderr.flush()
+                    os.execv(sys.executable,[sys.executable,str(SELF),'menu','--skip-auto-update'])
+            except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
+                Console.say('自动更新未完成，继续使用当前版本：'+str(e),'warn')
         while True:
-            Console.title('SSH 安全管理')
-            cls.call('status')
+            state,code=Beman.summary()
+            print('\n'+Console.color('BeMan '+VERSION,'1;36')+'  /  '+Console.color(state,code))
             print(Console.color('─'*48,'90'))
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  检测并自动升级','36'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             try:
-                choice=Console.ask('请选择 [0-8]：')
+                choice=Console.ask('请选择 [0-7]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
                     cls.call({'1':'start','2':'stop','3':'restart','4':'status'}[choice])
                 elif choice=='5': cls.whitelist()
                 elif choice=='6': cls.call('logs')
                 elif choice=='7':
-                    if Console.ask('从官方渠道检测并安装新版？[y/N]：').lower()=='y':
-                        cls.call('update'); Console.say('如已升级，请退出并重新运行 beman')
-                elif choice=='8':
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
                     else: Console.say('已取消卸载','warn')
@@ -573,27 +619,43 @@ class Beman:
                 Console.say('BeMan 已卸载；建议保持当前SSH会话并测试新连接','ok')
 
     @staticmethod
-    def status():
+    def protection_state(c):
+        pending=SSHGuard.PENDING.exists()
+        old=SSHGuard.owned()
+        if old is None:
+            return ('待回滚 / 请检查','33') if pending else ('已停止','90')
+        if run('systemctl','is-active','--quiet',SSH_SERVICE,check=False).returncode!=0:
+            return 'SSH服务未运行','33'
+        if pending:
+            return '待确认','33'
+        if old!=SSHGuard.candidate(c):
+            return '配置待应用','33'
+        SSHGuard.inspect(); SSHGuard.verify(c)
+        return '已开启','32'
+
+    @classmethod
+    def summary(cls):
+        try:
+            with locked(): return cls.protection_state(ConfigManager.load())
+        except (BemanError,OSError,ValueError,KeyError):
+            return '状态异常','31'
+
+    @classmethod
+    def status(cls):
+        Console.title('防护状态')
+        print('当前版本：'+VERSION)
         with locked():
             c=ConfigManager.load()
-            pending=SSHGuard.PENDING.exists()
             try:
-                old=SSHGuard.owned()
-                if old is None:
-                    state,code=('待回滚 / 请检查','33') if pending else ('已停止','90')
-                elif old!=SSHGuard.candidate(c):
-                    state,code='规则已应用，配置待更新','33'
-                else:
-                    SSHGuard.inspect(); SSHGuard.verify(c)
-                    active=run('systemctl','is-active','--quiet',SSH_SERVICE,check=False).returncode==0
-                    state,code=('待确认','33') if pending else ('已启用','32') if active else ('SSH服务未运行','33')
+                state,code=cls.protection_state(c)
                 print('防护状态：'+Console.color(state,code))
             except (BemanError,OSError,ValueError,KeyError) as e:
                 Console.say('防护状态异常：'+str(e),'error')
             print('允许用户：'+', '.join(c['allowed_users']))
             print('允许 IP：'+', '.join(c['allowed_ips']))
-            print('SSH 端口：'+str(c['ssh_port']))
-            if pending: Console.say('保留旧会话，从新白名单SSH会话再次启动确认','warn')
+            print('SSH 端口：'+SSHGuard.ports())
+            print('回滚时间：'+str(ROLLBACK_SECONDS)+' 秒（固定）')
+            if SSHGuard.PENDING.exists(): Console.say('保留旧会话，从新白名单SSH会话再次启动确认','warn')
 
     @classmethod
     def main(cls):
@@ -602,10 +664,11 @@ class Beman:
         parser.add_argument('--version',action='version',version='BeMan '+VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
+        parser.add_argument('--skip-auto-update',action='store_true',help=argparse.SUPPRESS)
         args=parser.parse_args(); op=args.operation
         if op=='version': print('BeMan '+VERSION); return
         root_check()
-        if op=='menu': Toolbox.menu(); return
+        if op=='menu': Toolbox.menu(skip_auto_update=args.skip_auto_update); return
         if op in ('start','restart','apply','reload'): cls.start(); return
         if op=='stop': cls.stop(); return
         if op=='uninstall': cls.uninstall(yes=args.yes); return
