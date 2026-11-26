@@ -336,16 +336,20 @@ class Console:
         return input(prompt).strip()
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise BemanError('发布地址发生重定向，拒绝继续')
+
+
 class Release:
-    # The official repository is the trust root; Pages is the delivery endpoint.
+    # The official HTTPS domain is the only default client-side release source.
     BASE='https://beman.teadan.com'
-    SOURCE='https://raw.githubusercontent.com/LeeYi-sen/BeMan/main'
     MAX_SIZE=2_000_000
 
     @classmethod
     def fetch(cls,url):
         req=urllib.request.Request(url,headers={'Cache-Control':'no-cache','User-Agent':'BeMan-Updater'})
-        with urllib.request.urlopen(req,timeout=20) as response:
+        with urllib.request.build_opener(NoRedirect()).open(req,timeout=20) as response:
             need(response.geturl()==url,'更新地址发生重定向，拒绝继续')
             data=response.read(cls.MAX_SIZE+1)
         need(0<len(data)<=cls.MAX_SIZE,'发布文件为空或过大')
@@ -354,13 +358,11 @@ class Release:
     @classmethod
     def inspect(cls):
         installer=cls.fetch(cls.BASE+'/install.sh')
-        official=cls.fetch(cls.SOURCE+'/install.sh')
-        need(installer==official,'Pages 与 GitHub 发布版本不一致，请稍后重试')
         matches=re.findall(rb'^PYTHON_SHA256="([a-f0-9]{64})"$',installer,re.M)
         need(len(matches)==1,'安装器缺少唯一有效SHA256')
         digest=matches[0].decode()
         source=cls.fetch(cls.BASE+'/beman.py')
-        need(hashlib.sha256(source).hexdigest()==digest,'Python主程序校验失败')
+        need(hashlib.sha256(source).hexdigest()==digest,'发布文件SHA256不一致，可能尚未同步；请稍后重试')
         compile(source,str(SELF),'exec')
         local=hashlib.sha256(SELF.read_bytes()).hexdigest()
         saved=ROOT/'install.sh'

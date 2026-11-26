@@ -11,7 +11,7 @@ Target: Ubuntu 22.04/24.04 or compatible Debian with systemd, Python 3.10+ and O
 ```bash
 sudo apt update
 sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux
-wget --https-only -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
 ```
 
 Installation downloads and verifies the program and prepares settings; it does not automatically change SSH policy. Inspect the installer and its trusted source before execution.
@@ -72,7 +72,7 @@ Every listed user can authenticate from every listed IP, subject to public-key a
 beman update
 ```
 
-The updater compares the raw installer in GitHub main with the Pages installer via HTTPS, checks the pinned Python SHA256 and syntax, then executes the verified installer. No background update schedule is configured. This trusts the repository and HTTPS certificate chain, not an independent signature or anti-downgrade mechanism. For older versions without online updates, rerun the installation command.
+Default installation, version checks and online updates access only https://beman.teadan.com ; clients do not need access to GitHub domains. Updates fetch the installer and Python program over HTTPS, check the installer's pinned SHA256 and Python/Bash syntax, and reject download redirects. Unsynchronized or mismatched release files are rejected. No background update schedule is configured. This trusts the official domain and HTTPS certificate chain; SHA256 checks integrity, not an independent signature or anti-downgrade mechanism. For older versions that still require GitHub Raw or lack online updates, rerun the installation command to migrate.
 
 Legacy settings migrate to four fields, preserving users, IPs, port and rollback time. The original settings are backed up at /opt/beman/backups/settings-before-simplification.json. Existing SSH policy is retained; the old owned beman.service is disabled and removed. If a legacy policy is pending or isolation is recorded, confirm/stop protection or release isolation using the old version before upgrading. Legacy logs and data volumes remain untouched; no data is deleted or automatically unlocked.
 

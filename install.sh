@@ -6,7 +6,7 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-PYTHON_SHA256="777aec4744fe2ec29d3074508b6fbb5edd4cba51b352cc10ea23252907ecfd56"
+PYTHON_SHA256="a59064247e78a265c479d4ab681ec271543166e269d525f0dfbecb3ad7bed2d3"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -45,7 +45,7 @@ trap 'rm -rf -- "$TMP"' EXIT
 info '下载并校验Python主程序'
 [[ -f "${BASH_SOURCE[0]}" ]] || fail '请先将安装器下载到文件再运行'
 cp -- "${BASH_SOURCE[0]}" "$TMP/install.sh"
-wget --https-only --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
+wget --https-only --max-redirect=0 --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
 printf '%s  %s\n' "$PYTHON_SHA256" "$TMP/beman.py" | sha256sum -c - || fail 'SHA256校验失败，未安装'
 python3 -m py_compile "$TMP/beman.py" || fail 'Python语法校验失败'
 for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do

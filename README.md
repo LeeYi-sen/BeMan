@@ -11,7 +11,7 @@ BeMan 是轻量级 Linux SSH 白名单管理工具。使用 OpenSSH 自身执行
 ```bash
 sudo apt update
 sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux
-wget --https-only -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
 ```
 
 安装仅下载、校验程序和生成配置，不自动修改 SSH 策略。建议先检查安装脚本及可信发布来源。
@@ -72,7 +72,7 @@ beman
 beman update
 ```
 
-升级比对 GitHub main 原始安装器与 Pages 安装器，通过 HTTPS 下载、校验 Python SHA256 与语法后执行安装器。不安排后台定时升级；信任 GitHub 仓库与 HTTPS 证书链，不是独立数字签名或防降级机制。旧版本没有在线升级功能时，重新执行安装命令即可。
+默认安装、版本检测和在线升级只访问 https://beman.teadan.com ，不要求客户端访问 GitHub 域名。升级通过 HTTPS 获取安装器与 Python 主程序，验证安装器中固定的 SHA256 和 Python/Bash 语法，不允许下载重定向；发布文件尚未同步或校验失败时拒绝升级。不安排后台定时升级。信任官方域名及 HTTPS 证书链，SHA256 用于文件完整性校验，不是独立数字签名或防降级机制。旧版本仍依赖 GitHub Raw 或没有在线升级功能时，重新执行安装命令即可切换到新版。
 
 旧版配置自动迁移至四个字段；保留现有用户/IP、端口和回滚时间。原配置备份至 /opt/beman/backups/settings-before-simplification.json。已有 SSH 防护规则不会改变；旧版自有 beman.service 将停用并移除。若旧版存在待确认策略或网络隔离记录，必须先通过旧版确认/停止防护或解除隔离后升级。旧日志与数据卷保持原状，不自动解锁或删除任何数据。
 
