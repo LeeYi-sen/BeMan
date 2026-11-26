@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101917">
+<meta name="description" content="BeMan — 轻量级 Linux SSH 安全管理工具。用户与 IP 白名单、公钥认证、自动升级、安全回滚。">
+<link rel="canonical" href="https://beman.teadan.com/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 3 57 13v18c0 14-9 24-25 30C16 55 7 45 7 31V13Z' fill='%2318312b' stroke='%2362d9b2' stroke-width='3'/%3E%3Cpath d='m19 31 9 9 17-19' stroke='%2362d9b2' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+<title>BeMan — Linux SSH 安全管理工具</title>
+<style>
+:root{color-scheme:dark;--bg:#101917;--surface:#17231f;--line:#30453c;--muted:#a7bbb0;--text:#e6f1eb;--accent:#7be3bd;--dark:#0b1210;--mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:pointer}a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:5px}svg{display:block;flex-shrink:0}.wrap{width:min(1040px,calc(100% - 48px));margin:auto}header{border-bottom:1px solid var(--line)}nav{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:10px;font-size:22px;font-weight:780;letter-spacing:-.6px;color:var(--text)}.navlinks{display:flex;align-items:center;gap:22px;font-size:14px;font-weight:600}.navlinks a{color:var(--muted)}.languages{display:flex;border:1px solid var(--line);border-radius:7px;padding:2px}.languages button{border:0;background:transparent;color:var(--muted);padding:4px 9px;border-radius:4px;font-size:13px}.languages button[aria-pressed="true"]{background:#294239;color:var(--accent)}.hero{text-align:center;padding:64px 0 44px;background:radial-gradient(ellipse at 50% 0%,#203b2e80,transparent 67%)}.hero-mark{margin:auto;filter:drop-shadow(0 12px 24px #0004)}h1{font-size:clamp(54px,9vw,86px);line-height:1;letter-spacing:-.055em;margin:18px 0 13px;color:var(--accent)}h2{font-size:clamp(26px,4.5vw,38px);letter-spacing:-.035em;line-height:1.25;margin:0 0 16px}.tagline{font-size:clamp(21px,3.4vw,28px);font-weight:650;margin:0 0 12px}.intro{color:var(--muted);max-width:640px;margin:0 auto 22px}.compat{display:inline-flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-size:13px;border:1px solid var(--line);padding:7px 16px;border-radius:6px}.dot{width:7px;height:7px;background:var(--accent);border-radius:50%;display:inline-block}.install{text-align:center;padding:0 0 56px}.install h2{color:var(--accent)}.command{display:flex;align-items:stretch;border:1px solid #38594b;background:var(--dark);border-radius:9px;text-align:left;overflow:hidden;box-shadow:0 8px 20px #0002}.command pre{margin:0;min-width:0;flex:1;padding:18px 20px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.75 var(--mono);color:var(--text);user-select:all}.prompt{color:var(--accent);user-select:none}.copy{border:0;border-left:1px solid var(--line);color:var(--accent);background:#1a2b23;padding:0 20px;display:flex;align-items:center;justify-content:center;gap:8px;min-width:104px;font-weight:650;font-size:14px}.copy:hover{background:#294239}.copy-status{min-height:1.6em;margin:5px 0 0;font-size:13px;color:var(--accent)}.install-note{color:var(--muted);font-size:14px;margin:5px auto 0;max-width:780px}.install-note code,.inline-code{font-family:var(--mono);color:var(--accent);background:#0e1712;padding:2px 5px;border-radius:3px}.section{border-top:1px solid var(--line);padding:49px 0}.section-heading{text-align:center;margin:0 auto 28px}.section-heading p{color:var(--muted);margin:0}.features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.feature{padding:24px 21px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}.feature svg{color:var(--accent);margin-bottom:15px}.feature h3{font-size:17px;margin:0 0 7px;font-weight:680}.feature p{color:var(--muted);font-size:14px;margin:0}.demo{display:grid;grid-template-columns:.8fr 1.2fr;align-items:center;gap:50px}.demo p{color:var(--muted)}.demo h2{color:var(--accent)}.steps{list-style:none;padding:0;margin:22px 0}.steps li{display:flex;gap:12px;margin:14px 0;align-items:baseline}.num{font:13px var(--mono);color:var(--accent);border:1px solid var(--line);border-radius:4px;padding:3px 7px}.terminal{border:1px solid var(--line);border-radius:10px;background:var(--dark);overflow:hidden;box-shadow:0 16px 35px #0003;min-width:0}.terminalbar{display:flex;align-items:center;gap:7px;padding:11px 14px;background:#1a2922;border-bottom:1px solid var(--line)}.lamp{width:9px;height:9px;border-radius:50%;background:#f07870}.lamp:nth-child(2){background:#e5b75e}.lamp:nth-child(3){background:#71cb98}.terminalbar span:last-child{margin:auto;color:var(--muted);font:12px var(--mono)}.terminalbody{font:14px/1.75 var(--mono);padding:20px 23px}.terminalbody .shell{color:var(--accent);margin-bottom:12px}.terminalbody .terminal-title{color:#80c8fb;font-weight:bold}.terminalbody .state{color:#8fe0b4}.terminalbody .rule{height:1px;background:#385248;margin:10px 0}.terminalbody .red{color:#ffa19a}.terminalbody .yellow{color:#f4cf87}.terminalbody .blue{color:#9bd5fd}.terminalbody .green{color:#90e0b4}.terminalbody .muted{color:#a7bbb0}.security{display:grid;grid-template-columns:1fr 1fr;gap:25px}.security article{border-left:2px solid #4c9478;padding-left:18px}.security h3{font-size:16px;margin:0 0 6px}.security p{font-size:14px;color:var(--muted);margin:0}.footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:13px}.footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.footerlinks{display:flex;gap:18px;flex-wrap:wrap}.footerlinks a{color:var(--muted)}@media(max-width:760px){.wrap{width:calc(100% - 32px)}nav{min-height:66px;gap:12px}.navlinks{gap:12px}.navlinks .desktop{display:none}.hero{padding:45px 0 34px}.features{grid-template-columns:repeat(2,minmax(0,1fr))}.demo{grid-template-columns:1fr;gap:24px}.section{padding:36px 0}.install{padding-bottom:36px}.command pre{padding:13px;font-size:13px}.copy{min-width:72px;padding:0 10px}.copy svg{display:none}}@media(max-width:420px){.features,.security{grid-template-columns:1fr}.feature{padding:20px}.brand{font-size:20px}.navlinks{gap:9px}.compat{font-size:12px;padding:6px 10px}.terminalbody{padding:15px;font-size:13px}.copy{min-width:58px}.footer .wrap{display:block}.footerlinks{margin-top:12px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" style="position:absolute"><defs>
+<symbol id="shield" viewBox="0 0 64 64"><path d="M32 3 57 13v18c0 14-9 24-25 30C16 55 7 45 7 31V13Z" fill="#18312b" stroke="#7be3bd" stroke-width="2.7"/><path d="m19 31 9 9 17-19" stroke="#7be3bd" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 3.5 6v6c0 5 4 8 8.5 10 4.5-2 8.5-5 8.5-10V6Z"/><path d="m8 12 3 3 5-6"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="m3 5 2 2 3-4M11 6h10M3 12l2 2 3-4m3 3h10M3 19l2 2 3-4m3 3h10"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-16 5m0-5v5h5m-5 5a9 9 0 0 0 16-5m0 5v-5h-5"/></symbol>
+<symbol id="i-rollback" viewBox="0 0 24 24"><path d="m8 5-5 5 5 5M3 10h10a7 7 0 0 1 7 7v2"/><path d="M13 3v4m-2-2h4"/></symbol>
+<symbol id="i-log" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/></symbol>
+<symbol id="i-remove" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15m-8 4v7m4-7v7"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+</defs></svg>
+<header><nav class="wrap" aria-label="Navigation">
+<a class="brand" href="/"><svg width="30" height="30" aria-hidden="true"><use href="#shield"/></svg>BeMan</a>
+<div class="navlinks">
+<a class="desktop" href="#features" data-zh="功能" data-en="Features">功能</a>
+<a class="desktop doclink" href="https://github.com/LeeYi-sen/BeMan/blob/main/README.md" data-zh="文档" data-en="Docs">文档</a>
+<a href="https://github.com/LeeYi-sen/BeMan">GitHub</a>
+<div class="languages" aria-label="Language"><button type="button" id="zh" lang="zh-CN" aria-pressed="true">中文</button><button type="button" id="en" lang="en" aria-pressed="false">EN</button></div>
+</div></nav></header>
+<main>
+<section class="hero"><div class="wrap">
+<svg class="hero-mark" width="86" height="86" aria-hidden="true"><use href="#shield"/></svg>
+<h1>BeMan</h1>
+<p class="tagline" data-zh="轻量级 Linux SSH 安全管理工具" data-en="Lightweight SSH security for Linux">轻量级 Linux SSH 安全管理工具</p>
+<p class="intro" data-zh="让服务器 SSH 安全管理更加简单。精确控制允许登录的用户和 IP，使用 OpenSSH 自身执行防护，无需常驻服务。" data-en="Make SSH access easier to manage. Allow only trusted users and IP addresses through OpenSSH itself, with no resident BeMan service.">让服务器 SSH 安全管理更加简单。精确控制允许登录的用户和 IP，使用 OpenSSH 自身执行防护，无需常驻服务。</p>
+<div class="compat"><span class="dot"></span><span data-zh="Ubuntu 22.04 / 24.04 · 兼容 Debian · systemd" data-en="Ubuntu 22.04 / 24.04 · Compatible Debian · systemd">Ubuntu 22.04 / 24.04 · 兼容 Debian · systemd</span></div>
+</div></section>
+<section class="install wrap" id="install"><h2 data-zh="一键安装 BeMan" data-en="Install BeMan">一键安装 BeMan</h2>
+<div class="command"><pre><span class="prompt" aria-hidden="true">$ </span><code id="install-command">wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh &amp;&amp; bash install.sh</code></pre><button class="copy" id="copy" type="button"><svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-copy"/></svg><span id="copy-label" data-zh="复制" data-en="Copy">复制</span></button></div>
+<p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
+<p class="install-note" data-zh="复制命令到 Linux 终端执行。安装器自动检测并安装缺失依赖，需要已有 wget、root 或 sudo 权限。首次安装 OpenSSH 可能启动 SSH 服务，BeMan 不会自动开启防护。" data-en="Paste into a Linux terminal. The installer detects and installs missing dependencies. Requires wget and root or sudo access. First-time OpenSSH installation may start SSH; BeMan does not activate protection automatically.">复制命令到 Linux 终端执行。安装器自动检测并安装缺失依赖，需要已有 wget、root 或 sudo 权限。首次安装 OpenSSH 可能启动 SSH 服务，BeMan 不会自动开启防护。</p>
+<p class="install-note"><a href="/install.sh" data-zh="查看安装脚本" data-en="Inspect installer">查看安装脚本</a> · <a class="doclink" href="https://github.com/LeeYi-sen/BeMan/blob/main/README.md" data-zh="完整安装与使用说明" data-en="Installation and usage guide">完整安装与使用说明</a></p>
+</section>
+<section class="section" id="features"><div class="wrap"><div class="section-heading"><h2 data-zh="BeMan 能做什么？" data-en="What does BeMan do?">BeMan 能做什么？</h2><p data-zh="专注 SSH 安全管理，不引入多余的复杂性。" data-en="Focused on SSH security, without unnecessary complexity.">专注 SSH 安全管理，不引入多余的复杂性。</p></div>
+<div class="features">
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-shield"/></svg><h3 data-zh="SSH 安全防护" data-en="SSH protection">SSH 安全防护</h3><p data-zh="通过 OpenSSH 限制登录用户与来源 IP，强制公钥认证。" data-en="Allow trusted users and source IPs, and require public-key authentication through OpenSSH.">通过 OpenSSH 限制登录用户与来源 IP，强制公钥认证。</p></article>
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-list"/></svg><h3 data-zh="白名单管理" data-en="Allowlist management">白名单管理</h3><p data-zh="独立增删用户名与 IP，修改后自动保存。" data-en="Add or remove individual users and IPs, with automatic saving.">独立增删用户名与 IP，修改后自动保存。</p></article>
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-refresh"/></svg><h3 data-zh="自动升级" data-en="Automatic updates">自动升级</h3><p data-zh="打开交互工具箱时检查新版，升级后自动进入新版菜单。" data-en="Check for releases when opening the toolbox and reopen the new version after updating.">打开交互工具箱时检查新版，升级后自动进入新版菜单。</p></article>
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-rollback"/></svg><h3 data-zh="安全回滚" data-en="Safe rollback">安全回滚</h3><p data-zh="新规则需从新 SSH 会话确认，未确认时尝试自动回滚。" data-en="Confirm new rules from a new SSH session or trigger an automatic rollback attempt.">新规则需从新 SSH 会话确认，未确认时尝试自动回滚。</p></article>
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-log"/></svg><h3 data-zh="登录日志" data-en="Login logs">登录日志</h3><p data-zh="直接查看系统 SSH 登录日志，无需额外日志服务。" data-en="Read SSH login records from the system journal without an additional logging service.">直接查看系统 SSH 登录日志，无需额外日志服务。</p></article>
+<article class="feature"><svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><use href="#i-remove"/></svg><h3 data-zh="安全卸载" data-en="Safe uninstall">安全卸载</h3><p data-zh="撤销自身防护规则，卸载 BeMan，保留系统 SSH 和软件依赖。" data-en="Remove BeMan and its rules while preserving system SSH and installed dependencies.">撤销自身防护规则，卸载 BeMan，保留系统 SSH 和软件依赖。</p></article>
+</div></div></section>
+<section class="section"><div class="wrap demo"><div><h2 data-zh="一个命令，打开工具箱" data-en="One command. Your SSH toolbox.">一个命令，打开工具箱</h2><p data-zh="无需 Web 管理后台。直接在 Linux 终端中管理防护状态和白名单。" data-en="No web administration panel. Manage protection and allowlists directly from your Linux terminal.">无需 Web 管理后台。直接在 Linux 终端中管理防护状态和白名单。</p><ol class="steps"><li><span class="num">01</span><span data-zh="运行 beman，进入管理菜单。" data-en="Run beman to open the management menu.">运行 beman，进入管理菜单。</span></li><li><span class="num">02</span><span data-zh="设置允许登录的用户和 IP。" data-en="Configure trusted users and IPs.">设置允许登录的用户和 IP。</span></li><li><span class="num">03</span><span data-zh="启动防护，并在新的 SSH 会话中确认。" data-en="Enable protection and confirm from a new SSH session.">启动防护，并在新的 SSH 会话中确认。</span></li></ol><a class="doclink" href="https://github.com/LeeYi-sen/BeMan/blob/main/README.md" data-zh="阅读使用文档 →" data-en="Read the usage guide →">阅读使用文档 →</a></div>
+<div class="terminal" aria-label="BeMan terminal example"><div class="terminalbar"><span class="lamp"></span><span class="lamp"></span><span class="lamp"></span><span>Linux Terminal · <span data-zh="界面示意" data-en="Example">界面示意</span></span></div><div class="terminalbody"><div class="shell">root@linux:~# beman</div><div><span class="terminal-title">BeMan 1.3</span> / <span class="state" data-zh="已开启" data-en="Enabled">已开启</span></div><div class="rule"></div>
+<div class="green">[1] <span data-zh="启动 / 确认防护" data-en="Start / confirm protection">启动 / 确认防护</span></div>
+<div class="red">[2] <span data-zh="停止防护" data-en="Stop protection">停止防护</span></div>
+<div class="yellow">[3] <span data-zh="重启防护" data-en="Restart protection">重启防护</span></div>
+<div class="blue">[4] <span data-zh="查看状态" data-en="Show status">查看状态</span></div>
+<div class="blue">[5] <span data-zh="白名单管理" data-en="Manage allowlist">白名单管理</span></div>
+<div class="blue">[6] <span data-zh="查看登录日志" data-en="View login logs">查看登录日志</span></div>
+<div class="red">[7] <span data-zh="一键卸载 BeMan" data-en="Uninstall BeMan">一键卸载 BeMan</span></div>
+<div class="muted">[0] <span data-zh="退出" data-en="Exit">退出</span></div>
+<div class="rule"></div><span data-zh="请选择 [0-7]：" data-en="Select [0-7]: ">请选择 [0-7]：</span>▌</div></div></div></section>
+<section class="section"><div class="wrap"><div class="section-heading"><h2 data-zh="保持简单，守住边界" data-en="Simple by design">保持简单，守住边界</h2></div><div class="security">
+<article><h3 data-zh="不接管系统 SSH" data-en="No takeover of system SSH">不接管系统 SSH</h3><p data-zh="不改变 SSH 监听端口，不自动开启防护，不删除系统依赖。" data-en="No changes to SSH listening ports, no automatic protection activation, and no removal of system dependencies.">不改变 SSH 监听端口，不自动开启防护，不删除系统依赖。</p></article>
+<article><h3 data-zh="保留恢复通道" data-en="Keep a recovery channel">保留恢复通道</h3><p data-zh="启用规则前确保公钥可用，保留旧 SSH 会话或独立控制台，不依赖自动回滚作为唯一恢复方式。" data-en="Before enabling rules, ensure keys work and keep an existing SSH session or independent console. Do not rely solely on automatic rollback.">启用规则前确保公钥可用，保留旧 SSH 会话或独立控制台，不依赖自动回滚作为唯一恢复方式。</p></article>
+</div></div></section>
+</main>
+<footer class="footer"><div class="wrap"><span>BeMan · <span data-zh="轻量 · 安全 · 简单" data-en="Lightweight · Secure · Simple">轻量 · 安全 · 简单</span></span><div class="footerlinks"><a href="https://github.com/LeeYi-sen/BeMan">GitHub</a><a class="doclink" href="https://github.com/LeeYi-sen/BeMan/blob/main/README.md" data-zh="使用文档" data-en="Documentation">使用文档</a><a href="https://github.com/LeeYi-sen/BeMan/issues" data-zh="问题反馈" data-en="Report an issue">问题反馈</a></div></div></footer>
+<script>
+(function(){
+  'use strict';
+  var lang='zh';
+  var status=document.getElementById('copy-status');
+  var code=document.getElementById('install-command');
+  var saved;
+  try{saved=localStorage.getItem('beman-language');}catch(e){}
+  function setLanguage(next){
+    lang=next==='en'?'en':'zh';
+    document.documentElement.lang=lang==='en'?'en':'zh-CN';
+    document.title=lang==='en'?'BeMan — Lightweight SSH security for Linux':'BeMan — Linux SSH 安全管理工具';
+    document.querySelectorAll('[data-zh][data-en]').forEach(function(el){el.textContent=el.dataset[lang];});
+    document.querySelectorAll('.doclink').forEach(function(el){el.href=lang==='en'?'https://github.com/LeeYi-sen/BeMan/blob/main/README_EN.md':'https://github.com/LeeYi-sen/BeMan/blob/main/README.md';});
+    document.getElementById('zh').setAttribute('aria-pressed',String(lang==='zh'));
+    document.getElementById('en').setAttribute('aria-pressed',String(lang==='en'));
+    status.textContent='';
+    try{localStorage.setItem('beman-language',lang);}catch(e){}
+  }
+  document.getElementById('zh').addEventListener('click',function(){setLanguage('zh');});
+  document.getElementById('en').addEventListener('click',function(){setLanguage('en');});
+  if(saved==='en'||saved==='zh')setLanguage(saved);
+  document.getElementById('copy').addEventListener('click',async function(){
+    try{
+      if(!navigator.clipboard||!navigator.clipboard.writeText)throw Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(code.textContent);
+      status.textContent=lang==='en'?'Installation command copied.':'安装命令已复制。';
+    }catch(e){
+      var selection=window.getSelection();
+      var range=document.createRange();range.selectNodeContents(code);
+      selection.removeAllRanges();selection.addRange(range);
+      status.textContent=lang==='en'?'Command selected. Copy it manually.':'已选中安装命令，请手动复制。';
+    }
+  });
+})();
+</script>
+</body>
+</html>
