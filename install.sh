@@ -6,7 +6,7 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-PYTHON_SHA256="97fcc6f911254d072f5e14f5cd3ac1fdaef857e6939a6e53a2987df5e464632f"
+PYTHON_SHA256="dd8e13e31dce585d633239977fe29159f571180210b66245528a086de212f259"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -27,14 +27,19 @@ BASE_URL=${BASE_URL%/}
 [[ "$PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail '发布SHA256格式无效'
 exec 9>/run/lock/beman-install.lock
 flock -x 9
-for dir in "$ROOT" "$ROOT/backups" "$ROOT/logs"; do
+for dir in "$ROOT" "$ROOT/backups"; do
     [[ ! -L "$dir" ]] || fail "拒绝符号链接目录：$dir"
     install -d -m 0700 -o root -g root "$dir"
 done
-[[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '存在待确认SSH配置或网络隔离，请先确认/恢复'
+[[ ! -L "$ROOT/backups/operation.lock" ]] || fail '拒绝符号链接锁文件'
+exec 8>"$ROOT/backups/operation.lock"
+flock -x 8
+[[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '请先使用旧版本确认SSH策略或停止防护、解除隔离'
 for target in "$ROOT/beman.py" "$ROOT/install.sh" "$ROOT/settings.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
 if [[ -e "$BIN" || -L "$BIN" ]]; then [[ -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]] || fail 'beman命令已被其他程序占用'; fi
 if [[ -e "$UNIT" ]]; then grep -Fxq '# Managed by Beman installer' "$UNIT" || fail '同名服务不属于Beman'; fi
+# Never stop a service not owned by the previous installer.
+if [[ ! -f "$UNIT" ]] && systemctl is-active --quiet beman.service; then fail '存在未知来源的同名服务'; fi
 TMP=$(mktemp -d)
 trap 'rm -rf -- "$TMP"' EXIT
 info '下载并校验Python主程序'
@@ -52,58 +57,32 @@ systemctl is-enabled --quiet beman.service && was_enabled=true
 restore(){
     local rc=$?; trap - ERR; set +e
     echo '安装失败，尝试恢复安装前的Beman程序、配置和服务。' >&2
-    systemctl stop beman.service
+    if [[ -f "$TMP/unit.old" ]]; then systemctl stop beman.service; fi
     for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
         path=${pair%:*}; name=${pair##*:}
         if [[ -f "$TMP/$name.old" ]]; then cp -p -- "$TMP/$name.old" "$path"; else rm -f -- "$path"; fi
     done
     if [[ ! -f "$TMP/python.old" && -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]]; then rm -f -- "$BIN"; fi
     systemctl daemon-reload
-    if [[ "$was_enabled" == true ]]; then systemctl enable beman.service; else systemctl disable beman.service; fi
-    if [[ "$was_active" == true ]]; then systemctl start beman.service; fi
+    if [[ -f "$TMP/unit.old" ]]; then
+        if [[ "$was_enabled" == true ]]; then systemctl enable beman.service; else systemctl disable beman.service; fi
+        if [[ "$was_active" == true ]]; then systemctl start --no-block beman.service; fi
+    fi
     exit "$rc"
 }
 trap restore ERR
+if [[ -f "$TMP/unit.old" ]]; then
+    systemctl disable --now beman.service
+    rm -- "$UNIT"
+    systemctl daemon-reload
+fi
 install -m 0700 -o root -g root "$TMP/beman.py" "$ROOT/.beman.py.new"
 mv -f -- "$ROOT/.beman.py.new" "$ROOT/beman.py"
 install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
-python3 "$ROOT/beman.py" init --url "$BASE_URL/beman.py" --sha256 "$PYTHON_SHA256"
-python3 "$ROOT/beman.py" check
+PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load()'
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
-cat > "$TMP/beman.service" <<'UNITFILE'
-# Managed by Beman installer
-[Unit]
-Description=Beman SSH access audit and recovery
-After=ssh.service network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 /opt/beman/beman.py monitor
-WorkingDirectory=/opt/beman
-User=root
-UMask=0077
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-UNITFILE
-install -m 0644 -o root -g root "$TMP/beman.service" "$UNIT"
-systemctl daemon-reload
-if [[ -f "$TMP/unit.old" ]]; then
-    if [[ "$was_enabled" == true ]]; then systemctl enable beman.service; else systemctl disable beman.service; fi
-    if [[ "$was_active" == true ]]; then
-        systemctl restart beman.service
-        systemctl is-active --quiet beman.service
-    else
-        systemctl stop beman.service
-    fi
-else
-    systemctl enable beman.service
-    systemctl restart beman.service
-    systemctl is-active --quiet beman.service
-fi
 trap - ERR
 ok "BeMan 已安装/升级：$ROOT"
-info '输入 beman 打开彩色管理工具箱；输入 beman update 自动升级'
+info '输入 beman 打开 SSH 管理工具箱；输入 beman update 自动升级'
+info '无常驻服务；原有 SSH 策略未改变。'
 info '首次启用或修改白名单时，保留旧会话，从新白名单SSH会话再次启动确认。'
