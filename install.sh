@@ -6,8 +6,8 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-BEMAN_VERSION="3"
-PYTHON_SHA256="83a4dcc1ec9be4cc519fab4ccf7daaa1fc9ae28f5ec92172f1fe71e1ad304649"
+BEMAN_VERSION="3.1"
+PYTHON_SHA256="a2c20019ba121ef0f3b0e47e665b8f56d6bff4610236de3d7be5e6056e4ecff0"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -165,7 +165,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
 PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; problems=beman.dependency_issues(); beman.need(not problems,"；".join(problems))'
 trap - ERR
-ok "BeMan v3.0 已安装/升级：$ROOT"
-info '输入 beman 自动检查升级并打开 SSH 管理工具箱'
+ok "BeMan v$BEMAN_VERSION 已安装/升级：$ROOT"
+info '输入 beman 打开 SSH 管理工具箱；选择检查更新按需升级'
 info '无常驻服务；原有 SSH 策略未改变。'
 info '首次启用或修改白名单时，保留旧会话，从新白名单SSH会话再次启动确认。'

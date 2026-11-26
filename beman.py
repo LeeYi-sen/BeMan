@@ -23,8 +23,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3'
-DISPLAY_VERSION = 'v3.0'
+VERSION = '3.1'
+DISPLAY_VERSION = 'v3.1'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -544,6 +544,8 @@ class Release:
 
     @classmethod
     def update(cls,check_only=False,quiet=False):
+        if not check_only:
+            need(not SSHGuard.PENDING.exists(),'请先确认或停止SSH策略')
         if not quiet: Console.say('正在检测官方发布…')
         installer,digest,local,published=cls.inspect()
         if not quiet or published!=local:
@@ -572,7 +574,7 @@ class Release:
 
 class Toolbox:
     @classmethod
-    def startup(cls,skip_auto_update=False):
+    def startup(cls):
         Console.clear()
         Console.title('启动检测')
         Console.result('系统环境','Linux / systemd')
@@ -605,19 +607,24 @@ class Toolbox:
             Console.result('SSH 服务',str(e),'error')
         state,code=Beman.summary()
         Console.result('安全策略',state,'error' if code=='31' else 'warn' if code=='33' else 'ok')
-        if skip_auto_update:
-            Console.result('版本检测','已完成本次升级')
-        elif SSHGuard.PENDING.exists() or issues or dependencies:
-            Console.result('版本检测','待确认或本地异常，跳过自动升级','warn')
-        else:
-            try:
-                if Release.update(quiet=True):
-                    sys.stdout.flush(); sys.stderr.flush()
-                    os.execv(sys.executable,[sys.executable,str(SELF),'menu','--skip-auto-update'])
-                Console.result('版本检测','最新版本')
-            except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
-                Console.result('版本检测',str(e),'warn')
         Console.pause('按 Enter 进入管理工具箱…')
+
+    @classmethod
+    def update_menu(cls):
+        Console.clear()
+        Console.title('检查更新')
+        audit('update','requested')
+        try:
+            changed=Release.update()
+        except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
+            audit('update','failed')
+            Console.say(str(e),'error')
+            return
+        audit('update','returned')
+        if changed:
+            Console.pause('按 Enter 进入新版管理工具箱…')
+            sys.stdout.flush(); sys.stderr.flush()
+            os.execv(sys.executable,[sys.executable,str(SELF),'menu'])
 
     @staticmethod
     def call(*args):
@@ -685,20 +692,20 @@ class Toolbox:
             Console.pause('按 Enter 返回白名单管理…')
 
     @classmethod
-    def menu(cls,skip_auto_update=False):
+    def menu(cls):
         need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
-        try: cls.startup(skip_auto_update)
+        try: cls.startup()
         except (EOFError,KeyboardInterrupt): return
         while True:
             Console.clear()
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  一键卸载 BeMan','31'),('8  检查更新','34'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
-                choice=Console.ask('请选择 [0-7]：')
+                choice=Console.ask('请选择 [0-8]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
                     Console.clear()
@@ -715,6 +722,8 @@ class Toolbox:
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
                     else: continue
+                elif choice=='8':
+                    cls.update_menu()
                 else: Console.say('无效选项','warn')
                 Console.pause()
             except (EOFError,KeyboardInterrupt):
@@ -883,7 +892,8 @@ class Beman:
         args=parser.parse_args(); op=args.operation
         if op=='version': print('BeMan '+DISPLAY_VERSION); return
         root_check()
-        if op=='menu': Toolbox.menu(skip_auto_update=args.skip_auto_update); return
+        # Keep accepting the old updater's --skip-auto-update argument.
+        if op=='menu': Toolbox.menu(); return
         if op in ('start','restart','apply','reload'):
             Console.title('重启防护' if op in ('restart','reload') else '启动 / 确认防护'); cls.start(); return
         if op=='stop': Console.title('停止防护'); cls.stop(); return
