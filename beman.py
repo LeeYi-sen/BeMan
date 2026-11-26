@@ -27,6 +27,8 @@ SSHD = '/usr/sbin/sshd'
 SSH_SERVICE = 'ssh.service'
 ROLLBACK = 'beman-ssh-rollback'
 SELF = ROOT / 'beman.py'
+BIN = Path('/usr/local/bin/beman')
+INSTALL_LOCK = Path('/run/lock/beman-install.lock')
 
 
 def item(value, comment):
@@ -434,10 +436,10 @@ class Toolbox:
             Console.title('SSH 安全管理')
             cls.call('status')
             print(Console.color('─'*48,'90'))
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  检测并自动升级','36'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  检测并自动升级','36'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             try:
-                choice=Console.ask('请选择 [0-7]：')
+                choice=Console.ask('请选择 [0-8]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
                     cls.call({'1':'start','2':'stop','3':'restart','4':'status'}[choice])
@@ -446,6 +448,10 @@ class Toolbox:
                 elif choice=='7':
                     if Console.ask('从官方渠道检测并安装新版？[y/N]：').lower()=='y':
                         cls.call('update'); Console.say('如已升级，请退出并重新运行 beman')
+                elif choice=='8':
+                    if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
+                        if cls.call('uninstall','--yes'): return
+                    else: Console.say('已取消卸载','warn')
                 else: Console.say('无效选项','warn')
                 Console.ask('按 Enter 返回主菜单…')
             except (EOFError,KeyboardInterrupt):
@@ -480,6 +486,66 @@ class Beman:
             Console.say('防护已停止，原SSH规则已恢复','ok')
 
     @staticmethod
+    def uninstall(yes=False):
+        if not yes:
+            need(sys.stdin.isatty(),'非交互卸载需明确指定 --yes')
+            if Console.ask('确认卸载 BeMan（删除程序、配置及自身备份；保留 SSH 与依赖）？[y/N]：').lower()!='y':
+                Console.say('已取消卸载','warn'); return
+        # Use the same lock order as install.sh; never remove the global install lock.
+        need(not INSTALL_LOCK.is_symlink(),'拒绝符号链接安装锁')
+        with open(INSTALL_LOCK,'a') as install_lock:
+            fcntl.flock(install_lock,fcntl.LOCK_EX)
+            need(ROOT.is_dir() and not ROOT.is_symlink() and STATE.is_dir() and not STATE.is_symlink(),'BeMan安装目录异常')
+            need(SELF.is_file() and not SELF.is_symlink(),'BeMan主程序不存在或路径异常')
+            need(not (STATE/'operation.lock').is_symlink(),'拒绝符号链接操作锁')
+            with locked():
+                need(not (STATE/'network-owned.json').exists() and not (STATE/'network-owned.json').is_symlink(),'存在旧版网络隔离记录，请先用旧版解除隔离')
+                need(not (BIN.exists() or BIN.is_symlink()) or (BIN.is_symlink() and os.readlink(BIN)==str(SELF)),'同名命令不属于BeMan，拒绝卸载')
+                legacy=UNIT_DIR/'beman.service'
+                if legacy.exists() or legacy.is_symlink():
+                    need(not legacy.is_symlink() and legacy.is_file() and '# Managed by Beman installer' in legacy.read_text().splitlines(),'同名服务不属于BeMan，拒绝卸载')
+                else:
+                    need(run('systemctl','is-active','--quiet','beman.service',check=False).returncode!=0,'存在未知来源的同名服务，拒绝卸载')
+                units=[UNIT_DIR/(ROLLBACK+suffix) for suffix in ('.service','.timer')]
+                for path in units:
+                    if path.exists() or path.is_symlink():
+                        need(not path.is_symlink() and path.is_file() and path.read_text().startswith(UNIT_MARK+'\n'),'同名回滚单元不属于BeMan，拒绝卸载')
+                logs=ROOT/'logs'; cache=ROOT/'__pycache__'
+                for directory in (logs,cache):
+                    need(not directory.is_symlink() and (not directory.exists() or directory.is_dir()),'目录异常：'+str(directory))
+                files=[ROOT/'install.sh',SETTINGS,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new']
+                if cache.is_dir(): files.extend(cache.glob('beman.*.pyc'))
+                for path in files:
+                    need(not path.is_symlink() and (not path.exists() or path.is_file()),'文件异常：'+str(path))
+                # Restore only our managed SSH rules. Failure aborts before deleting the program.
+                SSHGuard.rollback()
+                if POLICY.exists(): SSHGuard.rollback()
+                need(not POLICY.exists() and not POLICY.is_symlink() and not SSHGuard.PENDING.exists(),'SSH策略未完全撤销')
+                run(SSHD,'-t')
+                if SSHGuard.META.exists():
+                    # An externally removed policy might still be loaded by sshd.
+                    run('systemctl','reload',SSH_SERVICE)
+                    SSHGuard.META.unlink()
+                if any(p.exists() for p in units):
+                    stop_timer(ROLLBACK)
+                need(run('systemctl','is-active','--quiet',ROLLBACK+'.timer',check=False).returncode!=0,'回滚定时器仍在运行，拒绝卸载')
+                if legacy.exists():
+                    run('systemctl','disable','--now','beman.service')
+                    legacy.unlink()
+                    run('systemctl','daemon-reload')
+                Console.say('SSH防护已撤销；系统SSH服务及依赖保留','ok')
+                # Do not recursively delete: retain any unknown user files.
+                for path in files:
+                    if path!=STATE/'operation.lock': path.unlink(missing_ok=True)
+                BIN.unlink(missing_ok=True)
+                SELF.unlink()
+                (STATE/'operation.lock').unlink(missing_ok=True)
+                for directory in (logs,cache,STATE,ROOT):
+                    if directory.is_dir() and not any(directory.iterdir()): directory.rmdir()
+                if ROOT.exists(): Console.say('保留安装目录中非BeMan文件：'+str(ROOT),'warn')
+                Console.say('BeMan 已卸载；建议保持当前SSH会话并测试新连接','ok')
+
+    @staticmethod
     def status():
         with locked():
             c=ConfigManager.load()
@@ -507,11 +573,13 @@ class Beman:
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
         parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','check-update','update','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
         parser.add_argument('--rollback-token',default='')
+        parser.add_argument('--yes',action='store_true',help='明确确认卸载')
         args=parser.parse_args(); op=args.operation
         root_check()
         if op=='menu': Toolbox.menu(); return
         if op in ('start','restart','apply','reload'): cls.start(); return
-        if op in ('stop','uninstall'): cls.stop(); return
+        if op=='stop': cls.stop(); return
+        if op=='uninstall': cls.uninstall(yes=args.yes); return
         if op=='status': cls.status(); return
         if op=='logs':
             print(run('journalctl','-u',SSH_SERVICE,'-n','50','--no-pager','--output=short-iso').stdout,end=''); return

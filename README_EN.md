@@ -33,6 +33,7 @@ Non-root users can run `sudo beman`. Preserve SSH_CONNECTION when starting or co
 | 5 | Manage allowlist |
 | 6 | View login logs |
 | 7 | Detect and install updates |
+| 8 | Uninstall BeMan (keep SSH) |
 | 0 | Exit |
 
 Shortcut commands:
@@ -46,6 +47,7 @@ Shortcut commands:
 | `beman logs` | Read the last 50 SSH journal entries |
 | `beman check-update` | Detect versions without installing |
 | `beman update` | Detect and install updates |
+| `beman uninstall` | Confirm and uninstall BeMan, preserving system SSH and dependencies |
 
 For initial activation or changed rules, keep the old session open. Establish a **new public-key SSH session** from an allowed IP using an allowed user, and run start again to confirm. The default 300-second timeout attempts rollback if not confirmed. Do not rely on the timer as your only recovery channel or reboot before confirmation. If login fails, run stop from the old session or local console. Stopping does not override other system access restrictions or disconnect existing SSH sessions.
 
@@ -74,7 +76,13 @@ The updater compares the raw installer in GitHub main with the Pages installer v
 
 Legacy settings migrate to four fields, preserving users, IPs, port and rollback time. The original settings are backed up at /opt/beman/backups/settings-before-simplification.json. Existing SSH policy is retained; the old owned beman.service is disabled and removed. If a legacy policy is pending or isolation is recorded, confirm/stop protection or release isolation using the old version before upgrading. Legacy logs and data volumes remain untouched; no data is deleted or automatically unlocked.
 
-## 5. Layout and security boundaries
+## 5. Safe uninstall
+
+Select item 8 in `beman` or run `sudo beman uninstall`. After confirmation, the tool removes its managed SSH policy, validates the SSH configuration and reloads SSH as needed, cleans up owned rollback units and legacy service, and removes BeMan executables, command link, settings, own backups and legacy log. Unknown files are not recursively removed. If policy recovery fails, the program and recovery records are retained for troubleshooting. Non-interactive automation requires explicit `sudo beman uninstall --yes`.
+
+The installer checks that OpenSSH exists; it does not install packages via apt. The apt command in this README is run by the administrator. Regardless of whether SSH was already installed or installed specifically for BeMan, uninstall preserves openssh-server, openssh-client, authorized keys, host keys, all other SSH configuration and all system packages. It never runs apt remove/purge/autoremove. Keep the current SSH session open and verify a new connection before exiting. Any decision to remove OpenSSH must be made separately by an administrator with independent console access, after assessing dependencies and remote-access risks.
+
+## 6. Layout and security boundaries
 
 ```text
 /opt/beman/

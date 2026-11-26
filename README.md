@@ -33,6 +33,7 @@ beman
 | 5 | 白名单管理 |
 | 6 | 查看登录日志 |
 | 7 | 检测并自动升级 |
+| 8 | 一键卸载 BeMan（保留 SSH） |
 | 0 | 退出 |
 
 快捷命令：
@@ -46,6 +47,7 @@ beman
 | `beman logs` | 读取最近 50 条 SSH 系统日志 |
 | `beman check-update` | 检测版本，不安装 |
 | `beman update` | 检测并升级 |
+| `beman uninstall` | 确认后完整卸载 BeMan，保留系统 SSH 和依赖 |
 
 首次启动或规则改变时，保留旧 SSH 会话，从白名单 IP 以允许用户建立**新的公钥 SSH 连接**，再次执行 start 确认。默认 300 秒未确认则尝试自动回滚。请勿依赖定时器作为唯一恢复途径；确认前不要重启服务器。若新会话无法登录，从原会话或控制台执行 stop。停止不会强制开放其他原本被系统策略禁止的登录，也不会断开已有 SSH 会话。
 
@@ -74,7 +76,13 @@ beman update
 
 旧版配置自动迁移至四个字段；保留现有用户/IP、端口和回滚时间。原配置备份至 /opt/beman/backups/settings-before-simplification.json。已有 SSH 防护规则不会改变；旧版自有 beman.service 将停用并移除。若旧版存在待确认策略或网络隔离记录，必须先通过旧版确认/停止防护或解除隔离后升级。旧日志与数据卷保持原状，不自动解锁或删除任何数据。
 
-## 5. 运行结构与安全边界
+## 5. 安全卸载
+
+输入 `beman` 选择第 8 项，或执行 `sudo beman uninstall`，确认后自动撤销 BeMan SSH 策略、校验 SSH 配置并按需重载 SSH，清理自有回滚单元及旧服务，删除 BeMan 程序、命令链接、配置和自身备份/旧日志。未知文件与目录不会被递归删除；如果规则恢复失败，保留程序和恢复记录以便排查。非交互自动化必须明确指定 `sudo beman uninstall --yes`。
+
+安装器只检查 OpenSSH 是否存在，并不通过 apt 安装依赖。README 中的 apt 命令由管理员自行执行；即使重复安装了系统原有的 SSH，也不会改变本工具的卸载范围。无论 SSH 原先存在还是管理员为 BeMan 单独安装，卸载一律保留 openssh-server、openssh-client、SSH 公钥、主机密钥、其他 SSH 配置及全部软件包，不执行 apt remove/purge/autoremove。保持当前 SSH 会话，验证新连接成功后再退出；如果需要删除 OpenSSH，必须由管理员在独立控制台上另行评估依赖和远程访问风险。
+
+## 6. 运行结构与安全边界
 
 ```text
 /opt/beman/
