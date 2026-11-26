@@ -32,6 +32,7 @@ POLICY = Path('/etc/ssh/sshd_config.d/00-beman.conf')
 SSHD = '/usr/sbin/sshd'
 SSH_SERVICE = 'ssh.service'
 ROLLBACK = 'beman-ssh-rollback'
+ROLLBACK_STAMP = Path('/var/lib/systemd/timers/stamp-beman-ssh-rollback.timer')
 ROLLBACK_SECONDS = 300
 SELF = ROOT / 'beman.py'
 BIN = Path('/usr/local/bin/beman')
@@ -46,7 +47,7 @@ def manifest_data():
                      'backups/operation.lock','backups/ssh-policy.json',
                      'backups/ssh-pending.json','backups/settings-before-simplification.json'],
             'external':[str(BIN),str(POLICY),str(UNIT_DIR/(ROLLBACK+'.service')),
-                        str(UNIT_DIR/(ROLLBACK+'.timer'))],
+                        str(UNIT_DIR/(ROLLBACK+'.timer')),str(ROLLBACK_STAMP)],
             'legacy':['logs/beman.log','.beman.py.new','__pycache__/beman.*.pyc',
                       str(UNIT_DIR/'beman.service')],
             'retained':['system packages','system journal','global runtime install lock']}
@@ -798,6 +799,12 @@ class Beman:
                 if any(p.exists() for p in units):
                     stop_timer(ROLLBACK)
                 need(run('systemctl','is-active','--quiet',ROLLBACK+'.timer',check=False).returncode!=0,'回滚定时器仍在运行，拒绝卸载')
+                # systemd Persistent=true stores a timestamp outside the unit directory.
+                # Remove only the exact BeMan-owned state file; reject unexpected types.
+                if ROLLBACK_STAMP.exists() or ROLLBACK_STAMP.is_symlink():
+                    st=ROLLBACK_STAMP.lstat()
+                    need(stat.S_ISREG(st.st_mode) and st.st_uid==0,'回滚时间戳文件异常，拒绝删除')
+                    ROLLBACK_STAMP.unlink()
                 if legacy.exists():
                     run('systemctl','disable','--now','beman.service')
                     legacy.unlink()
@@ -811,7 +818,7 @@ class Beman:
                 (STATE/'operation.lock').unlink(missing_ok=True)
                 for directory in (logs,cache,STATE,ROOT):
                     if directory.is_dir() and not any(directory.iterdir()): directory.rmdir()
-                remaining=[p for p in [*files,BIN,SELF,POLICY,*units,legacy] if p.exists() or p.is_symlink()]
+                remaining=[p for p in [*files,BIN,SELF,POLICY,*units,legacy,ROLLBACK_STAMP] if p.exists() or p.is_symlink()]
                 need(not remaining,'卸载残留：'+', '.join(map(str,remaining)))
                 Console.say('BeMan 自有资源残留检查通过','ok')
                 if ROOT.exists(): Console.say('保留安装目录中非BeMan文件：'+str(ROOT),'warn')

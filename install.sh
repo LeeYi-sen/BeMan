@@ -7,7 +7,7 @@ umask 077
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
 BEMAN_VERSION="3"
-PYTHON_SHA256="878c2c11015112cfedfd56e7d0ef89eb2b09a03ec6a2e1b999bdc32ca18ef8df"
+PYTHON_SHA256="83a4dcc1ec9be4cc519fab4ccf7daaa1fc9ae28f5ec92172f1fe71e1ad304649"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -43,7 +43,7 @@ ensure_dependencies(){
     if ((${#missing[@]})); then
         command -v apt-get >/dev/null || fail '仅支持通过APT安装缺失依赖的系统'
         info "安装缺失依赖：${missing[*]}"
-        apt-get update
+        apt-get -o APT::Update::Error-Mode=any update
         DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get install -y --no-upgrade --no-remove --no-install-recommends -o Dpkg::Options::=--force-confold "${missing[@]}"
     else
         ok '系统依赖已满足，跳过APT安装'
@@ -56,7 +56,7 @@ ensure_dependencies(){
     ok '依赖检查完成'
 }
 # Startup can repair missing ordinary dependencies without changing SSH.
-if [[ "$${1:-}" == --repair-dependencies ]]; then
+if [[ "${1:-}" == --repair-dependencies ]]; then
     [[ -x /usr/sbin/sshd ]] || fail 'SSH Server缺失，启动检测不自动安装或启动SSH'
     [[ ! -e "$ROOT/backups/ssh-pending.json" ]] || fail '待确认期间不修复依赖'
     ensure_dependencies
