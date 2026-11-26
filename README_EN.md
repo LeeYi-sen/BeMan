@@ -55,6 +55,37 @@ Shortcut commands:
 
 For initial activation or changed rules, keep the old session open. Establish a **new public-key SSH session** from an allowed IP using an allowed user, and run start again to confirm. The fixed 300-second timeout attempts rollback if not confirmed. Do not rely on the timer as your only recovery channel or reboot before confirmation. If login fails, run stop from the old session or local console. Stopping does not override other system access restrictions or disconnect existing SSH sessions.
 
+### SSH public-key login
+
+Once BeMan protection is enabled and confirmed, new SSH logins must satisfy all of the following:
+
+- The login user is listed in `allowed_users`.
+- The client source IP as seen by the server is listed in `allowed_ips`.
+- The client holds a private key matching a public key authorized for the target user, and satisfies all remaining system SSH authentication and access restrictions.
+
+| Allowed user | Allowed IP | Authentication | BeMan policy result |
+| --- | --- | --- | --- |
+| Yes | Yes | Valid public-key authentication | Allowed, subject to other system restrictions |
+| Yes | Yes | Password or keyboard-interactive authentication | Denied |
+| Yes | No | Valid public-key authentication | Denied |
+| No | Yes | Valid public-key authentication | Denied |
+
+Configure the target user's authorized public key in OpenSSH beforehand (typically in `~/.ssh/authorized_keys`). Keep the private key on the client, not on the server. BeMan does not generate or manage user keys and does not require a separate BeMan login password.
+
+Run on the client (replace the example address with your server address):
+
+```bash
+ssh root@192.0.2.10
+```
+
+To specify a private key:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@192.0.2.10
+```
+
+Use `-p PORT` for a non-default SSH port. A passphrase-protected private key may still prompt for unlocking on the client. The IP allowlist refers to the client source address, not the server destination address in these commands. After initial activation or a rule change, keep the original session open and run `beman start` from a new public-key SSH session to confirm protection.
+
 ## 3. Configuration
 
 Use menu item 5 or edit /opt/beman/settings.json. There are only two fields, each on one line with value/comment. The addresses below are examples; replace them with the administrative source addresses actually observed by the server.
