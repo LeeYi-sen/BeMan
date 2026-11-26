@@ -98,6 +98,8 @@ BeMan 仅管理标准 Ubuntu/Debian OpenSSH 配置，存在其他 Match、AllowU
 
 当前新版本已进行隔离模拟测试，真实 Ubuntu/systemd（包括跨重启回滚）仍需实机验收。
 
-版本规则：当前版本为 1.1，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
+版本规则：当前版本为 1.2，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
+
+交互菜单自动清屏，用户、IP 与操作区分别使用分割线；操作结果保留至按 Enter 返回。非交互命令不清屏。
 
 发布：GitHub main → https://beman.teadan.com 。更新 beman.py 时必须同步更新 install.sh 内的 PYTHON_SHA256。

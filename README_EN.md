@@ -98,6 +98,8 @@ BeMan manages standard Ubuntu/Debian OpenSSH configurations. Existing Match, All
 
 The new version has isolated mock tests; real Ubuntu/systemd acceptance, including rollback across reboot, is still outstanding.
 
-Versioning: the current release is 1.1. Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
+Versioning: the current release is 1.2. Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
+
+Interactive menus clear the terminal and separate user, IP and action sections. Operation results remain visible until Enter is pressed. Non-interactive commands do not clear the terminal.
 
 Publishing: GitHub main → https://beman.teadan.com . When beman.py changes, update PYTHON_SHA256 in install.sh.

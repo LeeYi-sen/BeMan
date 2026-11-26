@@ -20,7 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '1.1'
+VERSION = '1.2'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -359,7 +359,16 @@ class Console:
     @classmethod
     def title(cls, text):
         print('\n'+cls.color('BeMan '+VERSION+'  /  '+text,'1;36'))
+        cls.divider()
+
+    @classmethod
+    def divider(cls):
         print(cls.color('─'*48,'90'))
+
+    @staticmethod
+    def clear():
+        if sys.stdout.isatty() and os.environ.get('TERM') not in (None,'','dumb'):
+            print('\033[2J\033[H',end='',flush=True)
 
     @staticmethod
     def ask(prompt):
@@ -461,15 +470,20 @@ class Toolbox:
                 original=SETTINGS.read_text()
                 data=ConfigManager.merge(DEFAULTS,json.loads(original))
                 c=ConfigManager.unwrap(data); ConfigManager.validate(c)
+            Console.clear()
             Console.title('白名单管理')
             for key,label in [('allowed_users','用户白名单'),('allowed_ips','IP 白名单')]:
                 print(label+'：')
                 for i,value in enumerate(c[key],1): print(f'  {i}. {value}')
+                Console.divider()
             print('[1] 添加 IP\n[2] 删除 IP\n[3] 添加用户\n[4] 删除用户\n[0] 返回主菜单')
+            Console.divider()
             choice=Console.ask('请选择：')
             if choice=='0': return
             if choice not in ('1','2','3','4'):
-                Console.say('无效选项','warn'); continue
+                Console.say('无效选项','warn')
+                Console.ask('按 Enter 继续…')
+                continue
             key='allowed_ips' if choice in ('1','2') else 'allowed_users'
             adding=choice in ('1','3')
             raw=Console.ask('输入要添加的'+('IP' if key=='allowed_ips' else '用户名')+'（空行取消）：' if adding else '输入要删除的编号（空行取消）：')
@@ -497,30 +511,44 @@ class Toolbox:
                 Console.say('白名单已保存','ok')
                 if old is not None: Console.say('选择重启防护应用新规则，并从新SSH会话确认','warn')
             except (BemanError,ValueError,OSError,KeyError) as e: Console.say(str(e),'error')
+            Console.ask('按 Enter 返回白名单管理…')
 
     @classmethod
     def menu(cls,skip_auto_update=False):
         need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
+        Console.clear()
+        update_warning=None
         if not skip_auto_update and not SSHGuard.PENDING.exists():
             try:
                 if Release.update(quiet=True):
                     sys.stdout.flush(); sys.stderr.flush()
                     os.execv(sys.executable,[sys.executable,str(SELF),'menu','--skip-auto-update'])
             except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
-                Console.say('自动更新未完成，继续使用当前版本：'+str(e),'warn')
+                update_warning='自动更新未完成，继续使用当前版本：'+str(e)
         while True:
+            Console.clear()
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+VERSION,'1;36')+'  /  '+Console.color(state,code))
-            print(Console.color('─'*48,'90'))
+            Console.divider()
+            if update_warning:
+                Console.say(update_warning,'warn')
+                Console.divider()
+                update_warning=None
             for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
+            Console.divider()
             try:
                 choice=Console.ask('请选择 [0-7]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
+                    Console.clear()
                     cls.call({'1':'start','2':'stop','3':'restart','4':'status'}[choice])
-                elif choice=='5': cls.whitelist()
-                elif choice=='6': cls.call('logs')
+                elif choice=='5':
+                    cls.whitelist()
+                    continue
+                elif choice=='6':
+                    Console.clear()
+                    cls.call('logs')
                 elif choice=='7':
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
@@ -529,7 +557,10 @@ class Toolbox:
                 Console.ask('按 Enter 返回主菜单…')
             except (EOFError,KeyboardInterrupt):
                 print(); return
-            except (BemanError,OSError,ValueError,KeyError) as e: Console.say(str(e),'error')
+            except (BemanError,OSError,ValueError,KeyError) as e:
+                Console.say(str(e),'error')
+                try: Console.ask('按 Enter 返回主菜单…')
+                except (EOFError,KeyboardInterrupt): return
 
 
 class Beman:
