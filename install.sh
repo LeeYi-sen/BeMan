@@ -6,11 +6,15 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-PYTHON_SHA256="c2b2f01ad85501f8e98ba920c1e31b90a6467fd0c88060d0266f49552a58188b"
+PYTHON_SHA256="97fcc6f911254d072f5e14f5cd3ac1fdaef857e6939a6e53a2987df5e464632f"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
-fail(){ printf '错误：%s\n' "$*" >&2; exit 1; }
+RED='' GREEN='' CYAN='' RESET=''
+if [[ -t 1 && "${TERM:-}" != dumb && -z "${NO_COLOR+x}" ]]; then RED=$'\033[31m'; GREEN=$'\033[32m'; CYAN=$'\033[36m'; RESET=$'\033[0m'; fi
+info(){ printf '%s[INFO]%s %s\n' "$CYAN" "$RESET" "$*"; }
+ok(){ printf '%s[ OK ]%s %s\n' "$GREEN" "$RESET" "$*"; }
+fail(){ printf '%s[ERR ]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 [[ $EUID == 0 ]] || fail '请使用root或sudo执行'
 [[ -d /run/systemd/system ]] || fail '仅支持正在运行的systemd Linux'
 for cmd in python3 wget sha256sum systemctl install flock; do command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"; done
@@ -28,16 +32,18 @@ for dir in "$ROOT" "$ROOT/backups" "$ROOT/logs"; do
     install -d -m 0700 -o root -g root "$dir"
 done
 [[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '存在待确认SSH配置或网络隔离，请先确认/恢复'
-for target in "$ROOT/beman.py" "$ROOT/settings.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
+for target in "$ROOT/beman.py" "$ROOT/install.sh" "$ROOT/settings.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
 if [[ -e "$BIN" || -L "$BIN" ]]; then [[ -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]] || fail 'beman命令已被其他程序占用'; fi
 if [[ -e "$UNIT" ]]; then grep -Fxq '# Managed by Beman installer' "$UNIT" || fail '同名服务不属于Beman'; fi
 TMP=$(mktemp -d)
 trap 'rm -rf -- "$TMP"' EXIT
-printf '下载并校验Python主程序...\n'
-wget --https-only --timeout=20 --tries=2 -O "$TMP/beman.py" "$BASE_URL/beman.py"
+info '下载并校验Python主程序'
+[[ -f "${BASH_SOURCE[0]}" ]] || fail '请先将安装器下载到文件再运行'
+cp -- "${BASH_SOURCE[0]}" "$TMP/install.sh"
+wget --https-only --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
 printf '%s  %s\n' "$PYTHON_SHA256" "$TMP/beman.py" | sha256sum -c - || fail 'SHA256校验失败，未安装'
 python3 -m py_compile "$TMP/beman.py" || fail 'Python语法校验失败'
-for pair in "$ROOT/beman.py:python" "$ROOT/settings.json:settings" "$UNIT:unit"; do
+for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
     path=${pair%:*}; name=${pair##*:}; if [[ -f "$path" ]]; then cp -p -- "$path" "$TMP/$name.old"; fi
 done
 was_active=false; was_enabled=false
@@ -47,7 +53,7 @@ restore(){
     local rc=$?; trap - ERR; set +e
     echo '安装失败，尝试恢复安装前的Beman程序、配置和服务。' >&2
     systemctl stop beman.service
-    for pair in "$ROOT/beman.py:python" "$ROOT/settings.json:settings" "$UNIT:unit"; do
+    for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
         path=${pair%:*}; name=${pair##*:}
         if [[ -f "$TMP/$name.old" ]]; then cp -p -- "$TMP/$name.old" "$path"; else rm -f -- "$path"; fi
     done
@@ -60,6 +66,7 @@ restore(){
 trap restore ERR
 install -m 0700 -o root -g root "$TMP/beman.py" "$ROOT/.beman.py.new"
 mv -f -- "$ROOT/.beman.py.new" "$ROOT/beman.py"
+install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
 python3 "$ROOT/beman.py" init --url "$BASE_URL/beman.py" --sha256 "$PYTHON_SHA256"
 python3 "$ROOT/beman.py" check
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
@@ -97,5 +104,6 @@ else
     systemctl is-active --quiet beman.service
 fi
 trap - ERR
-printf '\nBeman已安装/更新：%s\n配置：%s/settings.json\n' "$ROOT" "$ROOT"
-printf '首次安装仅启动审计，不会自动改变SSH、防火墙或数据卷。\n请配置白名单，然后执行 beman start；首次启用或修改规则时，从新SSH会话再次执行 beman start 确认。停止防护使用 beman stop。\n'
+ok "BeMan 已安装/升级：$ROOT"
+info '输入 beman 打开彩色管理工具箱；输入 beman update 自动升级'
+info '首次启用或修改白名单时，保留旧会话，从新白名单SSH会话再次启动确认。'

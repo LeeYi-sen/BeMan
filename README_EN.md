@@ -8,6 +8,22 @@ BeMan combines a Bash installer with a standard-library Python program for SSH u
 
 > Important: a fresh installation starts auditing only; it does not enforce SSH restrictions automatically. Keep a local console or independent recovery channel available and test on a disposable server first. Syntax, configuration and mocked integration tests have passed. Real Ubuntu/systemd, nftables and LUKS end-to-end acceptance testing is still outstanding.
 
+## Quick start
+
+Run `beman` after installation (or `sudo beman` as a non-root user) to open the colored terminal toolbox. The numbered menu provides start/confirm, stop, restart, status, allowlist editing, security settings, recent logs, advanced tools and update detection/installation. Enter users or IPs separated by spaces or commas; save and restart/confirm to apply SSH changes.
+
+```bash
+beman
+beman start
+beman stop
+beman restart
+beman status
+beman check-update
+beman update
+```
+
+On initial activation or changed rules, keep the old connection and select start/confirm again in a new allowed SSH session. Specify a command in non-interactive environments. ANSI colors are disabled for NO_COLOR or TERM=dumb.
+
 ## 1. Requirements
 
 - Target: Ubuntu 22.04/24.04 or compatible Debian Linux with running systemd.
@@ -78,6 +94,7 @@ If not confirmed within 300 seconds by default, a systemd timer attempts to rest
 ```text
 /opt/beman/
 ├── beman.py
+├── install.sh     # Copy of the installed release installer
 ├── settings.json
 ├── backups/       # Policy state, rollback records and operation lock
 └── logs/
@@ -108,7 +125,9 @@ Server-side commands require root privileges. Examples use sudo; root can omit i
 | `sudo beman isolate --authorized-incident` | Perform authorized, time-limited network isolation |
 | `sudo beman lock-storage --authorized-incident` | Normally unmount and close authorized dedicated LUKS volumes |
 | `sudo beman respond --authorized-incident` | Run enabled incident-response modules |
-| `sudo beman update` | Verify and replace Python program using configured URL and trusted SHA256 |
+| `sudo beman check-update` | Detect official Python and installer changes without modifying the system |
+| `sudo beman update` | Verify official release and automatically upgrade both scripts, retaining settings and service state |
+| `sudo beman update-pinned` | Update Python using a manually configured trusted SHA256 |
 | `sudo beman uninstall` | Release isolation, restore SSH policy and disable service; retain program, settings and logs |
 
 Internal commands `monitor` and `rollback-pending` are used by the service and rollback timer; normally they need not be run manually. See `beman --help` for all arguments.
@@ -164,7 +183,9 @@ sudo journalctl -u beman.service -n 100 --no-pager
 sudo tail -n 100 /opt/beman/logs/beman.log
 ```
 
-For `beman update`, obtain the new SHA256 from a trusted release channel, set update.python_url and update.sha256, then run `sudo beman update` and `sudo beman restart`. It does not automatically trust a new remote checksum. Use init to merge configuration fields if needed. Rerunning the installer also preserves existing update settings.
+Use `beman check-update` to detect changes or `beman update` (menu item 9) to install an update on demand. The updater compares the official GitHub main raw installer with the Pages installer over HTTPS, verifies the pinned Python SHA256 and Python/Bash syntax, and runs the verified installer. It refuses unsynchronized releases, unavailable downloads, pending policy confirmation or isolation. The installer retains configuration and service activation state and attempts rollback on installation failure. Versions are identified by file SHA256; no manual new digest is required. Reopen the toolbox after updating. No background update schedule is enabled by default. This trusts the official GitHub repository and HTTPS certificate chain; it is not an independent signature or anti-downgrade mechanism.
+
+The legacy manually pinned Python-only update remains available as `beman update-pinned`: set update.python_url and a trusted update.sha256 first. Restart the daemon as appropriate after that operation.
 
 For everyday use, only start, stop, restart and status are needed. Stop restores the original SSH policy and releases BeMan isolation without modifying other firewall or authentication rules; it does not unlock encrypted volumes. Uninstall also stops protection while retaining files. Legacy apply and confirm remain available for compatibility and troubleshooting. Installer upgrades preserve the previous service activation state.
 

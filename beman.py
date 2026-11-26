@@ -502,6 +502,197 @@ class LoginMonitor:
             p.terminate(); p.wait(timeout=5)
 
 
+class Console:
+    @staticmethod
+    def color(text, code):
+        if sys.stdout.isatty() and os.environ.get('TERM')!='dumb' and 'NO_COLOR' not in os.environ:
+            return '\033['+code+'m'+str(text)+'\033[0m'
+        return str(text)
+
+    @classmethod
+    def say(cls, text, kind='info'):
+        labels={'ok':('32','OK'),'warn':('33','!'),'error':('31','ERR'),'info':('36','INFO')}
+        code,label=labels[kind]
+        print(cls.color('['+label+']',code),text)
+
+    @classmethod
+    def title(cls, text):
+        print('\n'+cls.color('BeMan  /  '+text,'1;36'))
+        print(cls.color('─'*48,'90'))
+
+    @staticmethod
+    def ask(prompt):
+        return input(prompt).strip()
+
+
+class Release:
+    # The official repository is the trust root; Pages is the delivery endpoint.
+    BASE='https://beman.teadan.com'
+    SOURCE='https://raw.githubusercontent.com/LeeYi-sen/BeMan/main'
+    MAX_SIZE=2_000_000
+
+    @classmethod
+    def fetch(cls,url):
+        req=urllib.request.Request(url,headers={'Cache-Control':'no-cache','User-Agent':'BeMan-Updater'})
+        with urllib.request.urlopen(req,timeout=20) as response:
+            need(response.geturl()==url,'更新地址发生重定向，拒绝继续')
+            data=response.read(cls.MAX_SIZE+1)
+        need(0<len(data)<=cls.MAX_SIZE,'发布文件为空或过大')
+        return data
+
+    @classmethod
+    def inspect(cls):
+        installer=cls.fetch(cls.BASE+'/install.sh')
+        official=cls.fetch(cls.SOURCE+'/install.sh')
+        need(installer==official,'Pages 与 GitHub 发布版本不一致，请稍后重试')
+        matches=re.findall(rb'^PYTHON_SHA256="([a-f0-9]{64})"$',installer,re.M)
+        need(len(matches)==1,'安装器缺少唯一有效SHA256')
+        digest=matches[0].decode()
+        source=cls.fetch(cls.BASE+'/beman.py')
+        need(hashlib.sha256(source).hexdigest()==digest,'Python主程序校验失败')
+        compile(source,str(SELF),'exec')
+        local=hashlib.sha256(SELF.read_bytes()).hexdigest()
+        saved=ROOT/'install.sh'
+        same_installer=saved.is_file() and not saved.is_symlink() and saved.read_bytes()==installer
+        return installer,digest,local,local!=digest or not same_installer
+
+    @classmethod
+    def update(cls,check_only=False):
+        Console.say('正在检测官方发布…')
+        installer,digest,local,changed=cls.inspect()
+        print('本地版本：'+local[:12]+'  发布版本：'+digest[:12])
+        if not changed:
+            Console.say('已是最新版本','ok'); return False
+        Console.say('检测到新版本或安装器变更','warn')
+        if check_only: return False
+        need(not SSHGuard.PENDING.exists() and not NetworkGuard.OWN.exists(),'请先确认SSH策略并解除隔离')
+        with tempfile.TemporaryDirectory(prefix='beman-release-') as tmp:
+            path=Path(tmp)/'install.sh'; path.write_bytes(installer); path.chmod(0o700)
+            run('bash','-n',str(path))
+            # Do not hold operation.lock: the installer invokes beman init.
+            p=run('bash',str(path),cls.BASE,timeout=180)
+            print(p.stdout,end='')
+        need(hashlib.sha256(SELF.read_bytes()).hexdigest()==digest,'升级后版本校验失败')
+        need((ROOT/'install.sh').read_bytes()==installer,'升级后安装器校验失败')
+        Console.say('升级完成；原配置和服务启停状态已保留','ok')
+        return True
+
+
+class Toolbox:
+    @staticmethod
+    def call(*args):
+        # Dispatch through the same validated CLI, not a second implementation.
+        p=subprocess.run([sys.executable,str(SELF),*args])
+        if p.returncode: Console.say('操作未完成（退出码 '+str(p.returncode)+'）','error')
+        return p.returncode==0
+
+    @classmethod
+    def edit(cls, group, fields):
+        with locked():
+            original=SETTINGS.read_text()
+            data=ConfigManager.merge(DEFAULTS,json.loads(original))
+        while True:
+            Console.title(group)
+            for i,(path,label) in enumerate(fields,1):
+                node=data
+                for key in path.split('.'): node=node[key]
+                print(f'[{i}] {label}: {json.dumps(node["value"],ensure_ascii=False)}')
+            print('[s] 保存  [0] 返回（放弃未保存修改）')
+            choice=Console.ask('请选择：')
+            if choice=='0': return
+            if choice.lower()=='s':
+                try:
+                    with locked():
+                        need(SETTINGS.read_text()==original,'配置已被其他进程修改，请重新进入菜单')
+                        need(not SSHGuard.PENDING.exists(),'请先确认或停止待确认策略')
+                        need(not NetworkGuard.OWN.exists(),'隔离期间禁止修改配置，请先解除隔离')
+                        ConfigManager.validate(ConfigManager.unwrap(data))
+                        atomic(SETTINGS,ConfigManager.format(data)+'\n')
+                    Console.say('配置已保存；SSH规则变更请执行重启，并从新会话确认','ok')
+                    return
+                except (BemanError,ValueError,OSError,KeyError) as e:
+                    Console.say(str(e),'error')
+                continue
+            if not choice.isdigit() or not 1<=int(choice)<=len(fields):
+                Console.say('无效选项','warn'); continue
+            path,label=fields[int(choice)-1]; node=data
+            for key in path.split('.'): node=node[key]
+            current=node['value']
+            if path in ('authentication.allowed_users','authentication.allowed_ips'):
+                raw=Console.ask('输入完整名单（多个值用空格或逗号分隔，空行取消）：')
+            elif type(current) is bool:
+                raw=Console.ask('输入 y 启用 / n 关闭（空行取消）：')
+            elif type(current) is int:
+                raw=Console.ask('输入数字（空行取消）：')
+            else:
+                raw=Console.ask('输入JSON数组（空行取消）：')
+            if not raw: continue
+            try:
+                if path in ('authentication.allowed_users','authentication.allowed_ips'):
+                    value=list(dict.fromkeys(re.split(r'[\s,]+',raw)))
+                elif type(current) is bool:
+                    need(raw.lower() in ('y','n'),'请输入 y 或 n')
+                    value=raw.lower()=='y'
+                elif type(current) is int:
+                    value=int(raw)
+                else:
+                    value=json.loads(raw)
+                need(type(value)==type(node['value']),'值类型与原配置不同')
+                node['value']=value
+            except (ValueError,BemanError) as e: Console.say(str(e),'error')
+
+    @classmethod
+    def whitelist(cls):
+        cls.edit('白名单管理',[('authentication.allowed_users','允许用户'),('authentication.allowed_ips','允许IP'),('authentication.ssh_port','SSH端口')])
+
+    @classmethod
+    def settings(cls):
+        cls.edit('安全配置',[('network_isolation.enabled','允许网络隔离'),('network_isolation.auto_release_minutes','隔离分钟'),('protection.rollback_seconds','回滚秒数'),('protection.logging','文件日志'),('encrypted_storage.enabled','专用LUKS卷锁定'),('encrypted_storage.volumes','专用LUKS卷列表')])
+
+    @classmethod
+    def advanced(cls):
+        Console.title('高级工具')
+        print('[1] 检查配置  [2] 回滚SSH  [3] 解除隔离\n[4] 授权网络隔离  [5] 授权锁定专用LUKS卷\n[0] 返回')
+        choice=Console.ask('请选择：')
+        operations={'1':'check','2':'rollback','3':'release','4':'isolate','5':'lock-storage'}
+        if choice not in operations: return
+        op=operations[choice]
+        if choice in ('2','3','4','5'):
+            if Console.ask('确认执行 '+op+'？输入 YES：')!='YES':
+                Console.say('已取消','warn'); return
+        cls.call(op,*(['--authorized-incident'] if choice in ('4','5') else []))
+
+    @classmethod
+    def menu(cls):
+        need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
+        while True:
+            Console.title('Security Toolbox  ·  Linux服务器安全管理')
+            cls.call('status')
+            print(Console.color('─'*48,'90'))
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  安全配置','36'),('7  安全日志','36'),('8  高级工具','36'),('9  检测并自动升级','36'),('0  退出','90')]:
+                print(Console.color('['+label[0]+']'+label[1:],code))
+            try:
+                choice=Console.ask('请选择 [0-9]：')
+                if choice=='0': return
+                if choice in ('1','2','3','4'):
+                    cls.call({'1':'start','2':'stop','3':'restart','4':'status'}[choice])
+                elif choice=='5': cls.whitelist()
+                elif choice=='6': cls.settings()
+                elif choice=='7':
+                    subprocess.run(['journalctl','-u',SERVICE,'-n','50','--no-pager'])
+                elif choice=='8': cls.advanced()
+                elif choice=='9':
+                    if Console.ask('从官方渠道检测并自动安装新版？输入 YES：')=='YES':
+                        cls.call('update')
+                        Console.say('如已升级，请退出并重新运行 beman')
+                else: Console.say('无效选项','warn')
+                Console.ask('按 Enter 返回主菜单…')
+            except (EOFError,KeyboardInterrupt):
+                print(); return
+            except (BemanError,OSError,ValueError,KeyError) as e:
+                Console.say(str(e),'error')
+
+
 class Beman:
     @staticmethod
     def set_enabled(value):
@@ -537,9 +728,9 @@ class Beman:
                     SSHGuard.restore_pending()
                 raise
             if SSHGuard.PENDING.exists():
-                print('防护已临时启用；请保留当前会话，从白名单IP新建SSH连接后再次执行 beman start 确认，超时自动回滚。')
+                Console.say('防护临时启用。保留当前会话，从白名单IP新建SSH连接，再执行 beman start 确认。','warn')
             else:
-                print('Beman防护已启用。')
+                Console.say('防护已启用','ok')
 
     @classmethod
     def stop(cls):
@@ -562,7 +753,7 @@ class Beman:
                 cls.set_enabled(False)
             except (OSError,ValueError,KeyError,BemanError) as e:
                 print('防护已停止，但配置开关写入失败：'+str(e),file=sys.stderr)
-            print('Beman防护已停止，已恢复原SSH规则；不会自动解锁加密数据卷。')
+            Console.say('防护已停止，原SSH规则已恢复；加密数据卷不自动解锁。','ok')
 
     @staticmethod
     def status():
@@ -581,17 +772,17 @@ class Beman:
             elif policy=='已应用' and service=='active' and c['enabled']: state='运行中'
             elif policy=='未应用' and not NetworkGuard.OWN.exists(): state='未启动（仅审计）' if service=='active' else '已停止'
             else: state='部分生效 / 请检查'
-            print('防护状态：',state)
+            print('防护状态：',Console.color(state,'32' if state=='运行中' else '90' if state=='已停止' else '33'))
             print('总开关：',c['enabled'])
             print('白名单：',c['authentication']['allowed_users'],c['authentication']['allowed_ips'])
-            print('SSH策略：',policy)
+            print('SSH策略：',Console.color(policy,'32' if policy=='已应用' else '33' if pending else '90'))
             print('存储卷：',[(v['name'],(Path('/dev/mapper')/v['name']).exists()) for v in c['encrypted_storage']['volumes']])
         except (OSError,ValueError,KeyError,BemanError) as e:
             print('防护状态：异常；',str(e))
             print('SSH策略文件：','存在' if POLICY.exists() else '不存在')
         print('待确认：',pending)
         print('隔离状态记录：',NetworkGuard.OWN.exists())
-        print('守护服务：',service)
+        print('守护服务：',Console.color(service,'32' if service=='active' else '90'))
 
     @staticmethod
     def respond(c):
@@ -618,7 +809,7 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='Beman SSH安全守护程序')
-        parser.add_argument('operation',choices=['init','check','apply','reload','confirm','rollback','rollback-pending','status','start','stop','restart','monitor','isolate','release','lock-storage','respond','controller','controller-event','update','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','init','check','apply','reload','confirm','rollback','rollback-pending','status','start','stop','restart','monitor','isolate','release','lock-storage','respond','controller','controller-event','check-update','update','update-pinned','uninstall'])
         parser.add_argument('remote_operation',nargs='?',choices=['status','isolate','release','lock-storage','respond'])
         parser.add_argument('--authorized-incident',action='store_true'); parser.add_argument('--trusted-source',action='store_true'); parser.add_argument('--url',default=''); parser.add_argument('--sha256',default='')
         args=parser.parse_args(); op=args.operation
@@ -630,6 +821,8 @@ class Beman:
                 remote=args.remote_operation or 'status'; need(remote=='status' or args.authorized_incident,'需要明确授权 --authorized-incident'); ExternalController.send(c,remote)
             return
         root_check()
+        if op=='menu': Toolbox.menu(); return
+        if op in ('check-update','update'): Release.update(check_only=op=='check-update'); return
         if op=='monitor':
             logging.basicConfig(filename=ROOT/'logs/beman.log',level=logging.WARNING,format='%(asctime)s %(message)s'); LoginMonitor.watch(); return
         if op=='check':
@@ -649,7 +842,7 @@ class Beman:
             c=ConfigManager.load()
             if op=='status': cls.status(); return
             if op in ('apply','reload'): SSHGuard.apply(c); return
-            if op=='update': cls.update(c); return
+            if op=='update-pinned': cls.update(c); return
             need(args.authorized_incident,'安全响应需要明确授权 --authorized-incident')
             if op=='isolate': NetworkGuard.isolate(c)
             elif op=='lock-storage': StorageGuard.lock(c)

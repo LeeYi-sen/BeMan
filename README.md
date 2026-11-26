@@ -8,6 +8,22 @@ BeMan 使用 Bash 安装程序和 Python 标准库实现 SSH 用户/IP 联合白
 
 > 重要：首次安装仅启动审计，不自动启用 SSH 限制。请保留本地控制台或其他独立恢复通道，先在测试服务器验证。当前已通过语法、配置和模拟集成测试，尚未完成真实 Ubuntu/systemd、nftables 和 LUKS 的端到端验收。
 
+## 快速使用
+
+安装完成后输入 `beman`（普通用户使用 `sudo beman`），打开彩色终端工具箱。数字菜单支持启停/确认、重启、状态、白名单、安全配置、最近日志、高级工具及检测并自动升级。白名单可直接输入以空格或逗号分隔的用户/IP，保存后按提示重启并确认。
+
+```bash
+beman
+beman start
+beman stop
+beman restart
+beman status
+beman check-update
+beman update
+```
+
+首次启用或改变规则后，保留旧连接，在新白名单 SSH 会话再次选择启动/确认。非交互环境请指定命令；NO_COLOR 或 TERM=dumb 时不输出 ANSI 配色。
+
 ## 1. 环境要求
 
 - 目标系统：Ubuntu 22.04/24.04 或兼容 Debian Linux，正在运行 systemd。
@@ -78,6 +94,7 @@ sudo beman status
 ```text
 /opt/beman/
 ├── beman.py
+├── install.sh     # 已安装版本的安装器副本
 ├── settings.json
 ├── backups/       # 策略状态、回滚记录与操作锁
 └── logs/
@@ -108,7 +125,9 @@ sudo beman status
 | `sudo beman isolate --authorized-incident` | 经授权执行限时网络隔离 |
 | `sudo beman lock-storage --authorized-incident` | 经授权正常卸载并关闭专用 LUKS 卷 |
 | `sudo beman respond --authorized-incident` | 按已启用模块执行联合响应 |
-| `sudo beman update` | 按配置 URL 和可信 SHA256 校验并替换 Python 程序 |
+| `sudo beman check-update` | 检测官方 Python 和安装器版本，不修改系统 |
+| `sudo beman update` | 校验官方发布并自动升级两个脚本，保留配置与服务状态 |
+| `sudo beman update-pinned` | 使用配置中手工指定的可信 SHA256 更新 Python |
 | `sudo beman uninstall` | 解除隔离、恢复 SSH 策略并停用服务，保留程序、配置和日志 |
 
 内部命令 `monitor` 和 `rollback-pending` 由服务及回滚定时器调用，通常无需手动运行。完整参数可用 `beman --help` 查看。
@@ -164,7 +183,9 @@ sudo journalctl -u beman.service -n 100 --no-pager
 sudo tail -n 100 /opt/beman/logs/beman.log
 ```
 
-如果使用 `beman update`，先从可信发布渠道获得新版 SHA256，手动填写 update.python_url 和 update.sha256，再执行 `sudo beman update`、`sudo beman restart`。此命令不会自动接受远端新哈希；配置合并可通过 init 完成。再次运行安装器时已有更新参数也会保留。
+使用 `beman check-update` 仅检测版本，使用 `beman update` 或菜单第 9 项按需自动升级。升级器通过 HTTPS 比对官方 GitHub main 原始安装器与 Pages 安装器，验证安装器固定的 Python SHA256、Python/Bash 语法，再运行经过校验的安装器。若发布尚未同步、网络不可达、存在待确认策略或隔离，拒绝升级。安装器保留原配置和服务启停状态，安装失败时尝试恢复旧文件。版本以文件 SHA256 标识，不需要手工填写新版哈希。更新后重新进入工具箱。该功能不默认安排后台定时升级；信任官方 GitHub 仓库及 HTTPS 证书链，不是独立数字签名或防降级机制。
+
+手动固定哈希的旧式更新仍可通过 `beman update-pinned` 使用：先设置 update.python_url 和可信 update.sha256。该操作仅替换 Python，更新后按需重新启动守护服务。
 
 日常仅需 start、stop、restart、status 四个命令。stop 恢复原 SSH 规则并解除 BeMan 网络隔离，但不改变其他防火墙或认证规则，也不会自动解锁加密卷。uninstall 同样停用防护并保留文件。旧版 apply、confirm 等命令仍保留用于兼容和故障排查。升级安装保留原服务启停状态。
 
