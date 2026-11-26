@@ -34,8 +34,8 @@ Non-root users can run `sudo beman`. Preserve SSH_CONNECTION when starting or co
 | 4 | Show status |
 | 5 | Manage allowlist |
 | 6 | View login logs |
-| 7 | Uninstall BeMan (keep SSH) |
-| 8 | Check for updates (install newer releases automatically) |
+| 7 | Check for updates (install newer releases automatically) |
+| 8 | Uninstall BeMan (keep SSH) |
 | 0 | Exit |
 
 Shortcut commands:
@@ -74,13 +74,13 @@ Every listed user can authenticate from every listed IP, subject to public-key a
 beman update
 ```
 
-Default installation, version checks and online updates access only https://beman.teadan.com ; clients do not need access to GitHub domains. Updates fetch the installer and Python program over HTTPS, check the installer's pinned SHA256 and Python/Bash syntax, and reject download redirects. Unsynchronized or mismatched release files are rejected. Opening the interactive toolbox checks local dependencies, program and inventory integrity, allowlists, SSH service and policy, without contacting the release server. Press Enter after the checks to open the menu. Select item 8 to check for updates; a newer release is installed immediately without another confirmation. After success, press Enter to reopen the updated toolbox. When local checks are normal and no rules are pending, startup attempts to repair missing ordinary dependencies. It does not reinstall SSH, force a Python upgrade, or overwrite unknown configurations. Pending confirmation blocks upgrades; emergency CLI commands never access the network. No background update schedule is configured. This trusts the official domain and HTTPS certificate chain; SHA256 checks integrity, not an independent signature or anti-downgrade mechanism. For older versions that still require GitHub Raw or lack online updates, rerun the installation command to migrate.
+Default installation, version checks and online updates access only https://beman.teadan.com ; clients do not need access to GitHub domains. Updates fetch the installer and Python program over HTTPS, check the installer's pinned SHA256 and Python/Bash syntax, and reject download redirects. Unsynchronized or mismatched release files are rejected. Opening the interactive toolbox checks local dependencies, program and inventory integrity, allowlists, SSH service and policy, without contacting the release server. Press Enter after the checks to open the menu. Select item 7 to check for updates; a newer release is installed immediately without another confirmation. After success, press Enter to reopen the updated toolbox. When local checks are normal and no rules are pending, startup attempts to repair missing ordinary dependencies. It does not reinstall SSH, force a Python upgrade, or overwrite unknown configurations. Pending confirmation blocks upgrades; emergency CLI commands never access the network. No background update schedule is configured. This trusts the official domain and HTTPS certificate chain; SHA256 checks integrity, not an independent signature or anti-downgrade mechanism. For older versions that still require GitHub Raw or lack online updates, rerun the installation command to migrate.
 
 Legacy settings migrate to two fields, preserving users and IPs and dropping manual port and rollback-time settings. Original nested-format legacy settings are backed up at /opt/beman/backups/settings-before-simplification.json. Existing SSH policy is retained; the old owned beman.service is disabled and removed. If a legacy policy is pending or isolation is recorded, confirm/stop protection or release isolation using the old version before upgrading. Legacy logs and data volumes remain untouched; no data is deleted or automatically unlocked.
 
 ## 5. Safe uninstall
 
-Select item 7 in `beman` or run `sudo beman uninstall`. After confirmation, the tool removes its managed SSH policy, validates the SSH configuration and reloads SSH as needed, cleans up owned rollback units and legacy service, and removes BeMan executables, command link, settings, own backups and legacy log. Unknown files are not recursively removed. If policy recovery fails, the program and recovery records are retained for troubleshooting. Non-interactive automation requires explicit `sudo beman uninstall --yes`.
+Select item 8 in `beman` or run `sudo beman uninstall`. After confirmation, the tool removes its managed SSH policy, validates the SSH configuration and reloads SSH as needed, cleans up owned rollback units and legacy service, and removes BeMan executables, command link, settings, own backups and legacy log. Unknown files are not recursively removed. If policy recovery fails, the program and recovery records are retained for troubleshooting. Non-interactive automation requires explicit `sudo beman uninstall --yes`.
 
 The installer automatically installs missing dependencies, but this does not change the uninstall scope. Regardless of whether SSH was already installed or installed by BeMan, uninstall preserves openssh-server, openssh-client, authorized keys, host keys, all other SSH configuration and all system packages. It never runs apt remove/purge/autoremove. Keep the current SSH session open and verify a new connection before exiting. Any decision to remove OpenSSH must be made separately by an administrator with independent console access, after assessing dependencies and remote-access risks.
 
@@ -103,7 +103,7 @@ BeMan manages standard Ubuntu/Debian OpenSSH configurations. Existing Match, All
 
 Startup checks are local diagnostics, not independent proof against root tampering. System audit logs and the global runtime install lock are retained; unknown files are not deleted. v3.0 passed real Ubuntu 24.04 ARM64 acceptance, including rollback across reboot; other systems and architectures require separate validation.
 
-Versioning: the current release is v3.1 (internal comparison value 3.1). Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
+Versioning: the current release is v3.2 (internal comparison value 3.2). Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
 
 Interactive menus clear the terminal and separate user, IP and action sections. Operation results remain visible until Enter is pressed. Non-interactive commands do not clear the terminal.
 

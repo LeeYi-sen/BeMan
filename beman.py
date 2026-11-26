@@ -23,8 +23,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.1'
-DISPLAY_VERSION = 'v3.1'
+VERSION = '3.2'
+DISPLAY_VERSION = 'v3.2'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -701,7 +701,7 @@ class Toolbox:
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  一键卸载 BeMan','31'),('8  检查更新','34'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
@@ -716,13 +716,13 @@ class Toolbox:
                 elif choice=='6':
                     Console.clear()
                     cls.call('logs')
-                elif choice=='7':
+                elif choice=='8':
                     Console.clear()
                     Console.title('卸载 BeMan')
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
                     else: continue
-                elif choice=='8':
+                elif choice=='7':
                     cls.update_menu()
                 else: Console.say('无效选项','warn')
                 Console.pause()
