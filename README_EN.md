@@ -1,6 +1,6 @@
 # BeMan — SSH Security Toolbox
 
-[简体中文](README.md) · [GitHub](https://github.com/LeeYi-sen/BeMan)
+[简体中文](README.md) · [Official website](https://beman.teadan.com/) · [GitHub](https://github.com/LeeYi-sen/BeMan)
 
 BeMan is a lightweight Linux SSH allowlist manager. OpenSSH enforces user/IP allowlisting and public-key authentication directly. No resident BeMan daemon, Docker or third-party Python package is required.
 
@@ -8,9 +8,17 @@ BeMan is a lightweight Linux SSH allowlist manager. OpenSSH enforces user/IP all
 
 Target: Ubuntu 22.04/24.04 or compatible Debian with systemd, Python 3.10+ and OpenSSH Server. Configure working administrative public keys and keep a console or independent recovery channel available.
 
+### One-command installation
+
+Copy and run this single command in a Linux terminal (root or sudo privileges required):
+
 ```bash
-sudo apt update
-sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux
+sudo apt update && sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux && wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+```
+
+If all dependencies are already installed, use this shorter install or upgrade command:
+
+```bash
 wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
 ```
 

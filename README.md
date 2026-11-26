@@ -1,6 +1,6 @@
 # BeMan — SSH 安全管理工具箱
 
-[English](README_EN.md) · [GitHub](https://github.com/LeeYi-sen/BeMan)
+[English](README_EN.md) · [官方网站](https://beman.teadan.com/) · [GitHub](https://github.com/LeeYi-sen/BeMan)
 
 BeMan 是轻量级 Linux SSH 白名单管理工具。使用 OpenSSH 自身执行用户/IP 白名单与公钥认证，无需常驻 BeMan 服务、Docker 或第三方 Python 库。
 
@@ -8,9 +8,17 @@ BeMan 是轻量级 Linux SSH 白名单管理工具。使用 OpenSSH 自身执行
 
 适用于 Ubuntu 22.04/24.04 或兼容 Debian（systemd、Python 3.10+、OpenSSH Server）。先配置可用的管理公钥，并保留本地控制台或独立恢复通道。
 
+### 一键安装
+
+复制以下一条命令到 Linux 终端执行（需要 root 或 sudo 权限）：
+
 ```bash
-sudo apt update
-sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux
+sudo apt update && sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux && wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+```
+
+如果已经安装全部依赖，使用以下简洁命令安装或升级：
+
+```bash
 wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
 ```
 
