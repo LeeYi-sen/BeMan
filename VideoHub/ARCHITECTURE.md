@@ -1,0 +1,5 @@
+# Architecture 2.0
+
+Browser → VideoHub SSR/public APIs → local SQLite. Browser → external media host for video/cover. No media proxy/storage. Management_Center → signed HTTPS management APIs → same local SQLite. Management_Center is never in the public request path.
+
+The v1 schema retains `videos`, `video_sources`, `source_providers`, `categories`, `tags`, `video_tags`, `video_stats_daily`, `advertisements`, `settings`, `import_tasks`, `import_task_items`, `video_reports`, `operation_logs`, `redirects`. Removed `admins`, `scheduled_tasks`, legacy session secret. Added `api_nonces`, `ranking_entries`, `snapshot_versions`, `sitemap_entries`, `video_seo`, `import_requests`, `source_policy`. See backend/schema.sql for exact DDL, plus FTS5 triggers and indexes. No management-center database access. All date aggregation uses UTC. Ranking, indexing and source exclusion policies are controlled by the remote center, not an autonomous site scheduler. Detection reports HTTP facts; 200 is not verified playback. SSR is the sole supported front-end implementation in this release.

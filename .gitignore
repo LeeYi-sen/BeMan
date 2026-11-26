@@ -1,0 +1,29 @@
+# Local environments and credentials
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Python and editor caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+
+# Archives and generated runtime data
+*.zip
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+node_modules/
+
+# BeMan machine-specific configuration
+/settings.json
+/audit.log
+/backups/

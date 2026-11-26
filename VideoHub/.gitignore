@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/*
+backups/*
+logs/*
+frontend/node_modules/
+frontend/.nuxt/
+frontend/.output/
