@@ -6,8 +6,8 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-BEMAN_VERSION="1.2"
-PYTHON_SHA256="a225e12720bb9873c027ccb3ddeaff9f8b5eef9944f079f5bd45314f7db86966"
+BEMAN_VERSION="1.3"
+PYTHON_SHA256="837b911a85095433372539c7d3104b0609c95b5453b05cf786850e3b9da99772"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -16,16 +16,51 @@ if [[ -t 1 && "${TERM:-}" != dumb && -z "${NO_COLOR+x}" ]]; then RED=$'\033[31m'
 info(){ printf '%s[INFO]%s %s\n' "$CYAN" "$RESET" "$*"; }
 ok(){ printf '%s[ OK ]%s %s\n' "$GREEN" "$RESET" "$*"; }
 fail(){ printf '%s[ERR ]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
-[[ $EUID == 0 ]] || fail '请使用root或sudo执行'
+if [[ $EUID != 0 ]]; then
+    command -v sudo >/dev/null || fail '需要root权限或sudo'
+    exec sudo -- bash "$0" "$@"
+fi
 [[ -d /run/systemd/system ]] || fail '仅支持正在运行的systemd Linux'
-for cmd in python3 wget sha256sum systemctl install flock; do command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"; done
-python3 -c 'import sys; assert sys.version_info >= (3,10)' || fail '需要Python 3.10及以上'
-[[ -x /usr/sbin/sshd ]] || fail '请先安装openssh-server并配置管理公钥'
+command -v systemctl >/dev/null || fail '需要可用的systemd系统'
+
+# Only install missing dependencies; never explicitly upgrade or remove packages.
+ensure_dependencies(){
+    local -a missing=()
+    command -v python3 >/dev/null || missing+=(python3)
+    command -v wget >/dev/null || missing+=(wget)
+    if ! command -v sha256sum >/dev/null || ! command -v install >/dev/null; then missing+=(coreutils); fi
+    command -v flock >/dev/null || missing+=(util-linux)
+    [[ -s /etc/ssl/certs/ca-certificates.crt ]] || missing+=(ca-certificates)
+    if [[ ! -x /usr/sbin/sshd ]]; then
+        if systemctl is-active --quiet ssh.service || systemctl is-active --quiet ssh.socket; then
+            fail 'SSH已在运行但标准sshd路径异常，请检查系统，不自动重装SSH'
+        fi
+        missing+=(openssh-server)
+    fi
+    if command -v python3 >/dev/null; then
+        python3 -c 'import sys; assert sys.version_info >= (3,10)' || fail '现有Python版本低于3.10，请使用支持的系统'
+    fi
+    if ((${#missing[@]})); then
+        command -v apt-get >/dev/null || fail '仅支持通过APT安装缺失依赖的系统'
+        info "安装缺失依赖：${missing[*]}"
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get install -y --no-upgrade --no-remove --no-install-recommends -o Dpkg::Options::=--force-confold "${missing[@]}"
+    else
+        ok '系统依赖已满足，跳过APT安装'
+    fi
+    local cmd
+    for cmd in python3 wget sha256sum systemctl install flock; do command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"; done
+    python3 -c 'import sys; assert sys.version_info >= (3,10)' || fail '需要Python 3.10及以上'
+    [[ -s /etc/ssl/certs/ca-certificates.crt ]] || fail '系统CA证书不可用'
+    [[ -x /usr/sbin/sshd ]] || fail 'OpenSSH Server未正确安装'
+    ok '依赖检查完成'
+}
 # 可使用 bash install.sh https://example.com/beman，或在顶部填写BASE_URL。
 BASE_URL="${1:-$BASE_URL}"
 BASE_URL=${BASE_URL%/}
 [[ "$BASE_URL" == https://* && "$BASE_URL" != *[[:space:]]* && "$BASE_URL" != *\?* && "$BASE_URL" != *\#* ]] || fail '请填写真实HTTPS发布目录：bash install.sh https://你的域名/beman'
 [[ "$PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail '发布SHA256格式无效'
+ensure_dependencies
 exec 9>/run/lock/beman-install.lock
 flock -x 9
 for dir in "$ROOT" "$ROOT/backups"; do

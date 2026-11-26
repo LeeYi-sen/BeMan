@@ -13,16 +13,10 @@ BeMan 是轻量级 Linux SSH 白名单管理工具。使用 OpenSSH 自身执行
 复制以下一条命令到 Linux 终端执行（需要 root 或 sudo 权限）：
 
 ```bash
-sudo apt update && sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux && wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && bash install.sh
 ```
 
-如果已经安装全部依赖，使用以下简洁命令安装或升级：
-
-```bash
-wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
-```
-
-安装仅下载、校验程序和生成配置，不自动修改 SSH 策略。建议先检查安装脚本及可信发布来源。
+安装器自动检测并安装缺失的系统依赖，已有依赖直接跳过，无需手动执行 apt。初次下载安装器需要系统已有 wget；非 root 用户自动通过 sudo 获取安装权限。首次安装 OpenSSH 可能由系统包管理器启动 SSH 服务；BeMan 不自动应用防护策略或更改已有 SSH 配置。建议先检查安装脚本及可信发布来源。
 
 ## 2. 日常使用
 
@@ -86,7 +80,7 @@ beman update
 
 输入 `beman` 选择第 7 项，或执行 `sudo beman uninstall`，确认后自动撤销 BeMan SSH 策略、校验 SSH 配置并按需重载 SSH，清理自有回滚单元及旧服务，删除 BeMan 程序、命令链接、配置和自身备份/旧日志。未知文件与目录不会被递归删除；如果规则恢复失败，保留程序和恢复记录以便排查。非交互自动化必须明确指定 `sudo beman uninstall --yes`。
 
-安装器只检查 OpenSSH 是否存在，并不通过 apt 安装依赖。README 中的 apt 命令由管理员自行执行；即使重复安装了系统原有的 SSH，也不会改变本工具的卸载范围。无论 SSH 原先存在还是管理员为 BeMan 单独安装，卸载一律保留 openssh-server、openssh-client、SSH 公钥、主机密钥、其他 SSH 配置及全部软件包，不执行 apt remove/purge/autoremove。保持当前 SSH 会话，验证新连接成功后再退出；如果需要删除 OpenSSH，必须由管理员在独立控制台上另行评估依赖和远程访问风险。
+安装器自动安装缺失的依赖，但卸载范围不随依赖安装情况改变。无论 SSH 原先存在还是由 BeMan 安装，卸载一律保留 openssh-server、openssh-client、SSH 公钥、主机密钥、其他 SSH 配置及全部软件包，不执行 apt remove/purge/autoremove。保持当前 SSH 会话，验证新连接成功后再退出；如果需要删除 OpenSSH，必须由管理员在独立控制台上另行评估依赖和远程访问风险。
 
 ## 6. 运行结构与安全边界
 
@@ -106,7 +100,7 @@ BeMan 仅管理标准 Ubuntu/Debian OpenSSH 配置，存在其他 Match、AllowU
 
 当前新版本已进行隔离模拟测试，真实 Ubuntu/systemd（包括跨重启回滚）仍需实机验收。
 
-版本规则：当前版本为 1.2，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
+版本规则：当前版本为 1.3，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
 
 交互菜单自动清屏，用户、IP 与操作区分别使用分割线；操作结果保留至按 Enter 返回。非交互命令不清屏。
 

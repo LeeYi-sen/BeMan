@@ -13,16 +13,10 @@ Target: Ubuntu 22.04/24.04 or compatible Debian with systemd, Python 3.10+ and O
 Copy and run this single command in a Linux terminal (root or sudo privileges required):
 
 ```bash
-sudo apt update && sudo apt install -y python3 openssh-server wget ca-certificates coreutils util-linux && wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
+wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && bash install.sh
 ```
 
-If all dependencies are already installed, use this shorter install or upgrade command:
-
-```bash
-wget --https-only --max-redirect=0 -O install.sh https://beman.teadan.com/install.sh && sudo bash install.sh
-```
-
-Installation downloads and verifies the program and prepares settings; it does not automatically change SSH policy. Inspect the installer and its trusted source before execution.
+The installer detects and installs missing system dependencies automatically, skipping those already available. The initial download requires wget; non-root users automatically use sudo. The system package manager may start SSH when installing OpenSSH for the first time. BeMan does not automatically activate protection or change existing SSH configuration. Inspect the installer and its trusted source before execution.
 
 ## 2. Daily use
 
@@ -86,7 +80,7 @@ Legacy settings migrate to two fields, preserving users and IPs and dropping man
 
 Select item 7 in `beman` or run `sudo beman uninstall`. After confirmation, the tool removes its managed SSH policy, validates the SSH configuration and reloads SSH as needed, cleans up owned rollback units and legacy service, and removes BeMan executables, command link, settings, own backups and legacy log. Unknown files are not recursively removed. If policy recovery fails, the program and recovery records are retained for troubleshooting. Non-interactive automation requires explicit `sudo beman uninstall --yes`.
 
-The installer checks that OpenSSH exists; it does not install packages via apt. The apt command in this README is run by the administrator. Regardless of whether SSH was already installed or installed specifically for BeMan, uninstall preserves openssh-server, openssh-client, authorized keys, host keys, all other SSH configuration and all system packages. It never runs apt remove/purge/autoremove. Keep the current SSH session open and verify a new connection before exiting. Any decision to remove OpenSSH must be made separately by an administrator with independent console access, after assessing dependencies and remote-access risks.
+The installer automatically installs missing dependencies, but this does not change the uninstall scope. Regardless of whether SSH was already installed or installed by BeMan, uninstall preserves openssh-server, openssh-client, authorized keys, host keys, all other SSH configuration and all system packages. It never runs apt remove/purge/autoremove. Keep the current SSH session open and verify a new connection before exiting. Any decision to remove OpenSSH must be made separately by an administrator with independent console access, after assessing dependencies and remote-access risks.
 
 ## 6. Layout and security boundaries
 
@@ -106,7 +100,7 @@ BeMan manages standard Ubuntu/Debian OpenSSH configurations. Existing Match, All
 
 The new version has isolated mock tests; real Ubuntu/systemd acceptance, including rollback across reboot, is still outstanding.
 
-Versioning: the current release is 1.2. Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
+Versioning: the current release is 1.3. Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
 
 Interactive menus clear the terminal and separate user, IP and action sections. Operation results remain visible until Enter is pressed. Non-interactive commands do not clear the terminal.
 

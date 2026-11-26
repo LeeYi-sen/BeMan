@@ -20,7 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '1.2'
+VERSION = '1.3'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
