@@ -13,14 +13,18 @@ import os
 import pwd
 import re
 import shlex
+import shutil
 import subprocess
+import stat
 import sys
+import syslog
 import tempfile
 import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '1.3'
+VERSION = '3'
+DISPLAY_VERSION = 'v3.0'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -32,6 +36,32 @@ ROLLBACK_SECONDS = 300
 SELF = ROOT / 'beman.py'
 BIN = Path('/usr/local/bin/beman')
 INSTALL_LOCK = Path('/run/lock/beman-install.lock')
+MANIFEST = ROOT/'manifest.json'
+
+
+def manifest_data():
+    # An inventory, not a user-editable list of paths to delete.
+    return {'schema':1,'version':VERSION,
+            'files':['beman.py','install.sh','settings.json','manifest.json',
+                     'backups/operation.lock','backups/ssh-policy.json',
+                     'backups/ssh-pending.json','backups/settings-before-simplification.json'],
+            'external':[str(BIN),str(POLICY),str(UNIT_DIR/(ROLLBACK+'.service')),
+                        str(UNIT_DIR/(ROLLBACK+'.timer'))],
+            'legacy':['logs/beman.log','.beman.py.new','__pycache__/beman.*.pyc',
+                      str(UNIT_DIR/'beman.service')],
+            'retained':['system packages','system journal','global runtime install lock']}
+
+
+def dependency_issues():
+    issues=[]
+    if sys.version_info<(3,10): issues.append('需要 Python 3.10+')
+    for cmd in ('bash','wget','systemctl','journalctl','sha256sum','install','flock'):
+        if not shutil.which(cmd): issues.append('缺少 '+cmd)
+    if not os.access(SSHD,os.X_OK): issues.append('OpenSSH Server 不可用')
+    try:
+        if Path('/etc/ssl/certs/ca-certificates.crt').stat().st_size==0: issues.append('CA 证书为空')
+    except OSError: issues.append('CA 证书缺失')
+    return issues
 
 
 def item(value, comment):
@@ -51,6 +81,57 @@ class BemanError(Exception):
 def need(condition, message):
     if not condition:
         raise BemanError(message)
+
+
+def audit(operation, result):
+    # Local system journal, not a resident BeMan logging process.
+    try:
+        syslog.openlog('beman',syslog.LOG_PID,syslog.LOG_AUTHPRIV)
+        syslog.syslog(syslog.LOG_NOTICE,f'operation={operation} result={result} uid={os.getuid()} euid={os.geteuid()}')
+    except (OSError,ValueError):
+        print('警告：无法写入系统审计日志',file=sys.stderr)
+
+
+def integrity_issues():
+    # Diagnostic only: never prevent the administrator from stopping protection.
+    issues=[]
+    entries=[(ROOT,True,True),(STATE,True,True),(SELF,False,True),
+             (ROOT/'install.sh',False,True),(SETTINGS,False,True),(MANIFEST,False,True),
+             (STATE/'operation.lock',False,False),(SSHGuard.META,False,False),
+             (SSHGuard.PENDING,False,False),(POLICY,False,False)]
+    for path,directory,required in entries:
+        try:
+            st=path.lstat()
+            if st.st_uid!=0 or st.st_mode & 0o022 or not (stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)):
+                issues.append(str(path)+'：所有者、权限或文件类型异常')
+        except FileNotFoundError:
+            if required: issues.append(str(path)+'：缺失')
+        except OSError:
+            issues.append(str(path)+'：无法读取属性')
+    try:
+        if not BIN.is_symlink() or BIN.readlink()!=SELF:
+            issues.append(str(BIN)+'：命令链接异常')
+        installer=(ROOT/'install.sh').read_bytes()
+        matches=re.findall(rb'^PYTHON_SHA256="([a-f0-9]{64})"$',installer,re.M)
+        if len(matches)!=1 or hashlib.sha256(SELF.read_bytes()).hexdigest().encode()!=matches[0]:
+            issues.append('本地主程序与安装器SHA256不一致')
+        if Release.declared_version(installer,True)!=VERSION or Release.declared_version(SELF.read_bytes())!=VERSION:
+            issues.append('本地版本声明不一致')
+    except (BemanError,OSError,ValueError):
+        issues.append('本地发布文件无法校验')
+    try:
+        if read(MANIFEST)!=manifest_data():
+            issues.append('安装资源清单不一致')
+    except (OSError,ValueError,KeyError):
+        issues.append('安装资源清单无法读取')
+    try:
+        if SSHGuard.owned() is None and SSHGuard.META.exists():
+            issues.append('SSH防护文件缺失但仍有管理记录，请检查实际SSH状态')
+        if SSHGuard.PENDING.exists() and run('systemctl','is-active','--quiet',ROLLBACK+'.timer',check=False).returncode!=0:
+            issues.append('待确认策略的回滚计时器未运行')
+    except (BemanError,OSError,ValueError,KeyError):
+        issues.append('SSH策略完整性无法确认')
+    return issues
 
 
 def run(*args, check=True, timeout=30, input=None):
@@ -158,10 +239,24 @@ class ConfigManager:
 
 
 @contextlib.contextmanager
-def locked():
-    with open(STATE/'operation.lock','a') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+def file_lock(path,mode):
+    fd=os.open(path,os.O_CREAT|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'a') as f:
+        st=os.fstat(f.fileno())
+        need(stat.S_ISREG(st.st_mode) and st.st_uid==os.geteuid() and not st.st_mode&0o022,'锁文件权限或类型异常：'+str(path))
+        fcntl.flock(f,mode)
         yield
+
+
+@contextlib.contextmanager
+def locked(installation_locked=False):
+    # Serialize normal operations with installation/uninstallation. Keep the
+    # global runtime lock so waiters never lock a different inode after removal.
+    outer=contextlib.nullcontext() if installation_locked else file_lock(INSTALL_LOCK,fcntl.LOCK_SH)
+    with outer:
+        need(STATE.is_dir() and not STATE.is_symlink(),'BeMan状态目录异常')
+        with file_lock(STATE/'operation.lock',fcntl.LOCK_EX):
+            yield
 
 
 # Temporary persistent rollback units survive a reboot while a change is pending.
@@ -299,7 +394,7 @@ class SSHGuard:
             atomic(POLICY,old); dump(cls.META,{'hash':sha(old)})
         run(SSHD,'-t'); run('systemctl','reload',SSH_SERVICE)
         cls.PENDING.unlink(); stop_timer(ROLLBACK)
-        print('已恢复应用前SSH策略')
+        Console.say('已恢复应用前 SSH 策略','ok')
 
     @classmethod
     def apply(cls,c):
@@ -310,9 +405,12 @@ class SSHGuard:
             need(len(parts)==4 and str(ipaddress.ip_address(parts[0])) in a['allowed_ips'],'当前SSH来源不在新白名单，拒绝应用')
         for u in a['allowed_users']: pwd.getpwnam(u)
         cls.inspect(); run(SSHD,'-t'); old=cls.owned(); candidate=cls.candidate(c)
+        Console.say('SSH 配置校验通过','ok')
         token=secrets.token_hex(16)
         dump(cls.PENDING,{'token':token,'previous':old,'candidate_hash':sha(candidate),'connection':conn,'users':a['allowed_users'],'ips':a['allowed_ips']})
-        try: timer(ROLLBACK,ROLLBACK_SECONDS,'rollback-pending',token)
+        try:
+            timer(ROLLBACK,ROLLBACK_SECONDS,'rollback-pending',token)
+            Console.say('已建立临时回滚机制','ok')
         except Exception:
             cls.PENDING.unlink(); raise
         try:
@@ -320,7 +418,10 @@ class SSHGuard:
             cls.verify(c); run('systemctl','reload',SSH_SERVICE)
         except Exception:
             cls.restore_pending(); raise
-        print('SSH策略已应用。保留当前会话，从白名单IP新建SSH连接后执行 beman start（或 confirm）；超时自动回滚。')
+        Console.say('SSH 策略已应用','ok')
+        Console.divider()
+        Console.say('防护等待确认，回滚期限：'+str(ROLLBACK_SECONDS)+' 秒','warn')
+        print('保留当前 SSH 会话，从白名单 IP 建立新连接后进入 beman，选择启动 / 确认防护。')
 
     @classmethod
     def confirm(cls):
@@ -329,18 +430,18 @@ class SSHGuard:
         need(len(p)==4 and conn!=d['connection'] and str(ipaddress.ip_address(p[0])) in d['ips'] and user in d['users'],'请从白名单用户/IP的新SSH会话确认；sudo需保留SSH_CONNECTION')
         need(run('systemctl','is-active','--quiet',ROLLBACK+'.timer',check=False).returncode==0,'回滚计时器未运行')
         need(cls.owned() is not None and sha(POLICY.read_text())==d['candidate_hash'],'待确认策略已变化')
-        run(SSHD,'-t'); cls.PENDING.unlink(); stop_timer(ROLLBACK); print('SSH策略已确认')
+        run(SSHD,'-t'); cls.PENDING.unlink(); stop_timer(ROLLBACK); Console.say('SSH 策略已确认','ok')
 
     @classmethod
     def rollback(cls):
         if cls.PENDING.exists(): return cls.restore_pending()
         old=cls.owned()
-        if old is None: print('无Beman SSH策略'); return
+        if old is None: Console.say('无 BeMan SSH 策略'); return
         POLICY.unlink()
         try: run(SSHD,'-t'); run('systemctl','reload',SSH_SERVICE)
         except Exception:
             atomic(POLICY,old); raise
-        cls.META.unlink(missing_ok=True); print('已撤销Beman策略，其他SSH配置未修改')
+        cls.META.unlink(missing_ok=True); Console.say('已撤销 BeMan 策略，其他 SSH 配置未修改','ok')
 
 
 class Console:
@@ -358,7 +459,7 @@ class Console:
 
     @classmethod
     def title(cls, text):
-        print('\n'+cls.color('BeMan '+VERSION+'  /  '+text,'1;36'))
+        print('\n'+cls.color('BeMan '+DISPLAY_VERSION+'  /  '+text,'1;36'))
         cls.divider()
 
     @classmethod
@@ -373,6 +474,17 @@ class Console:
     @staticmethod
     def ask(prompt):
         return input(prompt).strip()
+
+    @classmethod
+    def result(cls,label,detail,kind='ok'):
+        colors={'ok':('32','通过'),'warn':('33','警告'),'error':('31','异常')}
+        code,tag=colors[kind]
+        print(cls.color('['+tag+']',code)+' '+label+'：'+detail)
+
+    @classmethod
+    def pause(cls,prompt='按 Enter 返回主菜单…'):
+        cls.divider()
+        cls.ask(prompt)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -437,6 +549,7 @@ class Release:
             print('本地版本：'+local)
             print('最新版本：'+published)
         if cls.version_key(published)<cls.version_key(local):
+            if quiet: raise BemanError('发布版本低于本地版本，拒绝降级')
             Console.say('发布版本低于本地版本，拒绝自动降级','warn'); return False
         if published==local:
             if not quiet: Console.say('已是最新版本','ok')
@@ -457,6 +570,54 @@ class Release:
 
 
 class Toolbox:
+    @classmethod
+    def startup(cls,skip_auto_update=False):
+        Console.clear()
+        Console.title('启动检测')
+        Console.result('系统环境','Linux / systemd')
+        dependencies=dependency_issues()
+        issues=integrity_issues()
+        if dependencies and not issues and not SSHGuard.PENDING.exists() and os.access(SSHD,os.X_OK) and shutil.which('apt-get'):
+            try:
+                # Do not automatically reinstall or start SSH, alter its policy,
+                # or attempt to replace an incompatible system Python.
+                if sys.version_info>=(3,10) and shutil.which('systemctl') and shutil.which('journalctl'):
+                    Console.say('正在修复缺失依赖…')
+                    with locked():
+                        need(not SSHGuard.PENDING.exists(),'待确认期间不修复依赖')
+                        run('bash',str(ROOT/'install.sh'),'--repair-dependencies',timeout=None)
+                    dependencies=dependency_issues()
+            except (BemanError,OSError,ValueError) as e:
+                Console.result('依赖修复',str(e),'warn')
+        Console.result('系统依赖','；'.join(dependencies) if dependencies else '满足运行要求','error' if dependencies else 'ok')
+        Console.result('本地完整性','；'.join(issues) if issues else '未发现异常','error' if issues else 'ok')
+        try:
+            with locked(): ConfigManager.load()
+            Console.result('白名单配置','有效')
+        except (BemanError,OSError,ValueError,KeyError) as e:
+            Console.result('白名单配置',str(e),'error')
+        try:
+            run(SSHD,'-t')
+            active=run('systemctl','is-active','--quiet',SSH_SERVICE,check=False).returncode==0
+            Console.result('SSH 服务','配置有效，服务运行' if active else '服务未运行','ok' if active else 'error')
+        except (BemanError,OSError) as e:
+            Console.result('SSH 服务',str(e),'error')
+        state,code=Beman.summary()
+        Console.result('安全策略',state,'error' if code=='31' else 'warn' if code=='33' else 'ok')
+        if skip_auto_update:
+            Console.result('版本检测','已完成本次升级')
+        elif SSHGuard.PENDING.exists() or issues or dependencies:
+            Console.result('版本检测','待确认或本地异常，跳过自动升级','warn')
+        else:
+            try:
+                if Release.update(quiet=True):
+                    sys.stdout.flush(); sys.stderr.flush()
+                    os.execv(sys.executable,[sys.executable,str(SELF),'menu','--skip-auto-update'])
+                Console.result('版本检测','最新版本')
+            except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
+                Console.result('版本检测',str(e),'warn')
+        Console.pause('按 Enter 进入管理工具箱…')
+
     @staticmethod
     def call(*args):
         p=subprocess.run([sys.executable,str(SELF),*args])
@@ -473,12 +634,13 @@ class Toolbox:
             Console.clear()
             Console.title('白名单管理')
             for key,label in [('allowed_users','用户白名单'),('allowed_ips','IP 白名单')]:
-                print(label+'：')
+                print(Console.color(label+'（'+str(len(c[key]))+'）','36'))
                 for i,value in enumerate(c[key],1): print(f'  {i}. {value}')
                 Console.divider()
-            print('[1] 添加 IP\n[2] 删除 IP\n[3] 添加用户\n[4] 删除用户\n[0] 返回主菜单')
+            for label,color in [('[1] 添加 IP','34'),('[2] 删除 IP','31'),('[3] 添加用户','34'),('[4] 删除用户','31'),('[0] 返回主菜单','90')]:
+                print(Console.color(label,color))
             Console.divider()
-            choice=Console.ask('请选择：')
+            choice=Console.ask('请选择 [0-4]：')
             if choice=='0': return
             if choice not in ('1','2','3','4'):
                 Console.say('无效选项','warn')
@@ -486,6 +648,11 @@ class Toolbox:
                 continue
             key='allowed_ips' if choice in ('1','2') else 'allowed_users'
             adding=choice in ('1','3')
+            Console.clear()
+            Console.title(('添加' if adding else '删除')+(' IP' if key=='allowed_ips' else '用户'))
+            if not adding:
+                for i,value in enumerate(c[key],1): print(f'  {i}. {value}')
+                Console.divider()
             raw=Console.ask('输入要添加的'+('IP' if key=='allowed_ips' else '用户名')+'（空行取消）：' if adding else '输入要删除的编号（空行取消）：')
             if not raw: continue
             try:
@@ -509,32 +676,24 @@ class Toolbox:
                     old=SSHGuard.owned()
                     atomic(SETTINGS,ConfigManager.format(data)+'\n')
                 Console.say('白名单已保存','ok')
+                audit('allowlist-change','success')
                 if old is not None: Console.say('选择重启防护应用新规则，并从新SSH会话确认','warn')
-            except (BemanError,ValueError,OSError,KeyError) as e: Console.say(str(e),'error')
-            Console.ask('按 Enter 返回白名单管理…')
+            except (BemanError,ValueError,OSError,KeyError) as e:
+                audit('allowlist-change','failed')
+                Console.say(str(e),'error')
+            Console.pause('按 Enter 返回白名单管理…')
 
     @classmethod
     def menu(cls,skip_auto_update=False):
         need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
-        Console.clear()
-        update_warning=None
-        if not skip_auto_update and not SSHGuard.PENDING.exists():
-            try:
-                if Release.update(quiet=True):
-                    sys.stdout.flush(); sys.stderr.flush()
-                    os.execv(sys.executable,[sys.executable,str(SELF),'menu','--skip-auto-update'])
-            except (BemanError,OSError,ValueError,KeyError,SyntaxError,http.client.HTTPException) as e:
-                update_warning='自动更新未完成，继续使用当前版本：'+str(e)
+        try: cls.startup(skip_auto_update)
+        except (EOFError,KeyboardInterrupt): return
         while True:
             Console.clear()
             state,code=Beman.summary()
-            print('\n'+Console.color('BeMan '+VERSION,'1;36')+'  /  '+Console.color(state,code))
+            print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            if update_warning:
-                Console.say(update_warning,'warn')
-                Console.divider()
-                update_warning=None
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','36'),('5  白名单管理','36'),('6  查看登录日志','36'),('7  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
@@ -550,11 +709,13 @@ class Toolbox:
                     Console.clear()
                     cls.call('logs')
                 elif choice=='7':
+                    Console.clear()
+                    Console.title('卸载 BeMan')
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
-                    else: Console.say('已取消卸载','warn')
+                    else: continue
                 else: Console.say('无效选项','warn')
-                Console.ask('按 Enter 返回主菜单…')
+                Console.pause()
             except (EOFError,KeyboardInterrupt):
                 print(); return
             except (BemanError,OSError,ValueError,KeyError) as e:
@@ -568,6 +729,7 @@ class Beman:
     def start():
         with locked():
             c=ConfigManager.load()
+            Console.say('白名单配置校验通过','ok')
             old=SSHGuard.owned(); candidate=SSHGuard.candidate(c)
             if SSHGuard.PENDING.exists():
                 need(old==candidate,'待确认期间配置已变化，请先停止防护')
@@ -587,6 +749,11 @@ class Beman:
             SSHGuard.rollback()
             if POLICY.exists(): SSHGuard.rollback()
             need(not POLICY.exists() and not SSHGuard.PENDING.exists(),'SSH策略仍存在，请检查')
+            if SSHGuard.META.exists():
+                # A missing policy on disk might still be active in sshd.
+                run(SSHD,'-t')
+                run('systemctl','reload',SSH_SERVICE)
+                SSHGuard.META.unlink()
             Console.say('防护已停止，原SSH规则已恢复','ok')
 
     @staticmethod
@@ -596,13 +763,11 @@ class Beman:
             if Console.ask('确认卸载 BeMan（删除程序、配置及自身备份；保留 SSH 与依赖）？[y/N]：').lower()!='y':
                 Console.say('已取消卸载','warn'); return
         # Use the same lock order as install.sh; never remove the global install lock.
-        need(not INSTALL_LOCK.is_symlink(),'拒绝符号链接安装锁')
-        with open(INSTALL_LOCK,'a') as install_lock:
-            fcntl.flock(install_lock,fcntl.LOCK_EX)
+        with file_lock(INSTALL_LOCK,fcntl.LOCK_EX):
             need(ROOT.is_dir() and not ROOT.is_symlink() and STATE.is_dir() and not STATE.is_symlink(),'BeMan安装目录异常')
             need(SELF.is_file() and not SELF.is_symlink(),'BeMan主程序不存在或路径异常')
             need(not (STATE/'operation.lock').is_symlink(),'拒绝符号链接操作锁')
-            with locked():
+            with locked(installation_locked=True):
                 need(not (STATE/'network-owned.json').exists() and not (STATE/'network-owned.json').is_symlink(),'存在旧版网络隔离记录，请先用旧版解除隔离')
                 need(not (BIN.exists() or BIN.is_symlink()) or (BIN.is_symlink() and os.readlink(BIN)==str(SELF)),'同名命令不属于BeMan，拒绝卸载')
                 legacy=UNIT_DIR/'beman.service'
@@ -617,7 +782,7 @@ class Beman:
                 logs=ROOT/'logs'; cache=ROOT/'__pycache__'
                 for directory in (logs,cache):
                     need(not directory.is_symlink() and (not directory.exists() or directory.is_dir()),'目录异常：'+str(directory))
-                files=[ROOT/'install.sh',SETTINGS,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new']
+                files=[ROOT/'install.sh',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new']
                 if cache.is_dir(): files.extend(cache.glob('beman.*.pyc'))
                 for path in files:
                     need(not path.is_symlink() and (not path.exists() or path.is_file()),'文件异常：'+str(path))
@@ -646,6 +811,9 @@ class Beman:
                 (STATE/'operation.lock').unlink(missing_ok=True)
                 for directory in (logs,cache,STATE,ROOT):
                     if directory.is_dir() and not any(directory.iterdir()): directory.rmdir()
+                remaining=[p for p in [*files,BIN,SELF,POLICY,*units,legacy] if p.exists() or p.is_symlink()]
+                need(not remaining,'卸载残留：'+', '.join(map(str,remaining)))
+                Console.say('BeMan 自有资源残留检查通过','ok')
                 if ROOT.exists(): Console.say('保留安装目录中非BeMan文件：'+str(ROOT),'warn')
                 Console.say('BeMan 已卸载；建议保持当前SSH会话并测试新连接','ok')
 
@@ -654,6 +822,7 @@ class Beman:
         pending=SSHGuard.PENDING.exists()
         old=SSHGuard.owned()
         if old is None:
+            if SSHGuard.META.exists(): return '策略文件缺失，请检查','31'
             return ('待回滚 / 请检查','33') if pending else ('已停止','90')
         if run('systemctl','is-active','--quiet',SSH_SERVICE,check=False).returncode!=0:
             return 'SSH服务未运行','33'
@@ -674,7 +843,7 @@ class Beman:
     @classmethod
     def status(cls):
         Console.title('防护状态')
-        print('当前版本：'+VERSION)
+        print('当前版本：'+DISPLAY_VERSION)
         with locked():
             c=ConfigManager.load()
             try:
@@ -682,34 +851,55 @@ class Beman:
                 print('防护状态：'+Console.color(state,code))
             except (BemanError,OSError,ValueError,KeyError) as e:
                 Console.say('防护状态异常：'+str(e),'error')
-            print('允许用户：'+', '.join(c['allowed_users']))
-            print('允许 IP：'+', '.join(c['allowed_ips']))
+            active=run('systemctl','is-active','--quiet',SSH_SERVICE,check=False).returncode==0
+            print('SSH 服务：'+Console.color('运行中' if active else '未运行','32' if active else '31'))
             print('SSH 端口：'+SSHGuard.ports())
             print('回滚时间：'+str(ROLLBACK_SECONDS)+' 秒（固定）')
+            print('运行方式：OpenSSH 原生规则，无常驻 BeMan 进程')
+            issues=integrity_issues()
+            print('本地完整性：'+Console.color('存在异常' if issues else '未发现异常','31' if issues else '32'))
+            for issue in issues: Console.say(issue,'warn')
+            for key,label in [('allowed_users','用户白名单'),('allowed_ips','IP 白名单')]:
+                Console.divider()
+                print(Console.color(label+'（'+str(len(c[key]))+'）','36'))
+                for i,value in enumerate(c[key],1): print(f'  {i}. {value}')
             if SSHGuard.PENDING.exists(): Console.say('保留旧会话，从新白名单SSH会话再次启动确认','warn')
 
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
-        parser.add_argument('--version',action='version',version='BeMan '+VERSION)
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('--version',action='version',version='BeMan '+DISPLAY_VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
         parser.add_argument('--skip-auto-update',action='store_true',help=argparse.SUPPRESS)
         args=parser.parse_args(); op=args.operation
-        if op=='version': print('BeMan '+VERSION); return
+        if op=='version': print('BeMan '+DISPLAY_VERSION); return
         root_check()
         if op=='menu': Toolbox.menu(skip_auto_update=args.skip_auto_update); return
-        if op in ('start','restart','apply','reload'): cls.start(); return
-        if op=='stop': cls.stop(); return
+        if op in ('start','restart','apply','reload'):
+            Console.title('重启防护' if op in ('restart','reload') else '启动 / 确认防护'); cls.start(); return
+        if op=='stop': Console.title('停止防护'); cls.stop(); return
         if op=='uninstall': cls.uninstall(yes=args.yes); return
         if op=='status': cls.status(); return
         if op=='logs':
-            print(run('journalctl','-u',SSH_SERVICE,'-n','50','--no-pager','--output=short-iso').stdout,end=''); return
+            Console.title('SSH 登录日志')
+            for line in run('journalctl','-u',SSH_SERVICE,'-n','50','--no-pager','--output=short-iso').stdout.splitlines():
+                color='32' if 'Accepted ' in line else '31' if any(t in line for t in ('Failed password','Failed publickey','not allowed','Invalid user')) else '90' if 'Disconnected from' in line else '37'
+                print(Console.color(line,color))
+            Console.title('BeMan 操作审计')
+            print(run('journalctl','-t','beman','-n','20','--no-pager','--output=short-iso').stdout,end=''); return
+        if op=='audit':
+            print(run('journalctl','-t','beman','-n','50','--no-pager','--output=short-iso').stdout,end=''); return
         if op in ('check-update','update'): Release.update(check_only=op=='check-update'); return
         with locked():
             if op=='init': ConfigManager.init(); Console.say('配置已生成/迁移','ok')
-            elif op=='check': ConfigManager.load(); Console.say('配置有效','ok')
+            elif op=='check':
+                ConfigManager.load()
+                issues=integrity_issues()
+                for issue in issues: Console.say(issue,'warn')
+                need(not issues,'本地完整性检查发现异常')
+                Console.say('配置有效，本地完整性未发现异常','ok')
             elif op=='confirm': SSHGuard.confirm()
             elif op=='rollback': SSHGuard.rollback()
             elif op=='rollback-pending':
@@ -719,6 +909,11 @@ class Beman:
 
 if __name__=='__main__':
     try:
+        op=sys.argv[1] if len(sys.argv)>1 else 'menu'
+        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init')
+        if sensitive: audit(op,'requested')
         Beman.main()
+        if sensitive: audit(op,'returned')
     except (BemanError,OSError,ValueError,KeyError) as exc:
+        if sensitive: audit(op,'failed')
         print('错误：'+str(exc),file=sys.stderr); sys.exit(1)

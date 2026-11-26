@@ -6,8 +6,8 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-BEMAN_VERSION="1.3"
-PYTHON_SHA256="837b911a85095433372539c7d3104b0609c95b5453b05cf786850e3b9da99772"
+BEMAN_VERSION="3"
+PYTHON_SHA256="878c2c11015112cfedfd56e7d0ef89eb2b09a03ec6a2e1b999bdc32ca18ef8df"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -49,19 +49,31 @@ ensure_dependencies(){
         ok '系统依赖已满足，跳过APT安装'
     fi
     local cmd
-    for cmd in python3 wget sha256sum systemctl install flock; do command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"; done
+    for cmd in python3 wget sha256sum systemctl journalctl install flock; do command -v "$cmd" >/dev/null || fail "缺少依赖：$cmd"; done
     python3 -c 'import sys; assert sys.version_info >= (3,10)' || fail '需要Python 3.10及以上'
     [[ -s /etc/ssl/certs/ca-certificates.crt ]] || fail '系统CA证书不可用'
     [[ -x /usr/sbin/sshd ]] || fail 'OpenSSH Server未正确安装'
     ok '依赖检查完成'
 }
+# Startup can repair missing ordinary dependencies without changing SSH.
+if [[ "$${1:-}" == --repair-dependencies ]]; then
+    [[ -x /usr/sbin/sshd ]] || fail 'SSH Server缺失，启动检测不自动安装或启动SSH'
+    [[ ! -e "$ROOT/backups/ssh-pending.json" ]] || fail '待确认期间不修复依赖'
+    ensure_dependencies
+    exit 0
+fi
 # 可使用 bash install.sh https://example.com/beman，或在顶部填写BASE_URL。
 BASE_URL="${1:-$BASE_URL}"
 BASE_URL=${BASE_URL%/}
 [[ "$BASE_URL" == https://* && "$BASE_URL" != *[[:space:]]* && "$BASE_URL" != *\?* && "$BASE_URL" != *\#* ]] || fail '请填写真实HTTPS发布目录：bash install.sh https://你的域名/beman'
 [[ "$PYTHON_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail '发布SHA256格式无效'
 ensure_dependencies
-exec 9>/run/lock/beman-install.lock
+LOCK=/run/lock/beman-install.lock
+if [[ ! -e "$LOCK" && ! -L "$LOCK" ]]; then
+    (set -C; : > "$LOCK") 2>/dev/null || true
+fi
+[[ -f "$LOCK" && ! -L "$LOCK" && -O "$LOCK" ]] || fail '安装锁文件类型或所有者异常'
+exec 9>>"$LOCK"
 flock -x 9
 for dir in "$ROOT" "$ROOT/backups"; do
     [[ ! -L "$dir" ]] || fail "拒绝符号链接目录：$dir"
@@ -71,7 +83,7 @@ done
 exec 8>"$ROOT/backups/operation.lock"
 flock -x 8
 [[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '请先使用旧版本确认SSH策略或停止防护、解除隔离'
-for target in "$ROOT/beman.py" "$ROOT/install.sh" "$ROOT/settings.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
+for target in "$ROOT/beman.py" "$ROOT/install.sh" "$ROOT/settings.json" "$ROOT/manifest.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
 if [[ -e "$BIN" || -L "$BIN" ]]; then [[ -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]] || fail 'beman命令已被其他程序占用'; fi
 if [[ -e "$UNIT" ]]; then grep -Fxq '# Managed by Beman installer' "$UNIT" || fail '同名服务不属于Beman'; fi
 # Never stop a service not owned by the previous installer.
@@ -118,7 +130,7 @@ if pathlib.Path(old).is_file():
     else:
         print('旧版无数字版本号，迁移至 BeMan '+version)
 PY
-for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
+for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
     path=${pair%:*}; name=${pair##*:}; if [[ -f "$path" ]]; then cp -p -- "$path" "$TMP/$name.old"; fi
 done
 was_active=false; was_enabled=false
@@ -128,7 +140,7 @@ restore(){
     local rc=$?; trap - ERR; set +e
     echo '安装失败，尝试恢复安装前的Beman程序、配置和服务。' >&2
     if [[ -f "$TMP/unit.old" ]]; then systemctl stop beman.service; fi
-    for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
+    for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
         path=${pair%:*}; name=${pair##*:}
         if [[ -f "$TMP/$name.old" ]]; then cp -p -- "$TMP/$name.old" "$path"; else rm -f -- "$path"; fi
     done
@@ -149,10 +161,11 @@ fi
 install -m 0700 -o root -g root "$TMP/beman.py" "$ROOT/.beman.py.new"
 mv -f -- "$ROOT/.beman.py.new" "$ROOT/beman.py"
 install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
-PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load()'
+PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load(); beman.dump(beman.MANIFEST,beman.manifest_data())'
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
+PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; problems=beman.dependency_issues(); beman.need(not problems,"；".join(problems))'
 trap - ERR
-ok "BeMan $BEMAN_VERSION 已安装/升级：$ROOT"
+ok "BeMan v3.0 已安装/升级：$ROOT"
 info '输入 beman 自动检查升级并打开 SSH 管理工具箱'
 info '无常驻服务；原有 SSH 策略未改变。'
 info '首次启用或修改白名单时，保留旧会话，从新白名单SSH会话再次启动确认。'

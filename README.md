@@ -45,6 +45,7 @@ beman
 | `beman stop` | 撤销 BeMan 的 SSH 规则，恢复原有认证规则 |
 | `beman restart` | 重新读取并应用配置 |
 | `beman status` | 查看 SSH 防护状态、用户、IP、端口 |
+| `beman audit` | 查看 BeMan 操作审计日志 |
 | `beman logs` | 读取最近 50 条 SSH 系统日志 |
 | `beman check-update` | 检测版本，不安装 |
 | `beman update` | 检测并升级 |
@@ -72,7 +73,7 @@ beman
 beman update
 ```
 
-默认安装、版本检测和在线升级只访问 https://beman.teadan.com ，不要求客户端访问 GitHub 域名。升级通过 HTTPS 获取安装器与 Python 主程序，验证安装器中固定的 SHA256 和 Python/Bash 语法，不允许下载重定向；发布文件尚未同步或校验失败时拒绝升级。每次打开交互工具箱时自动检测并升级，成功后自动打开新版；无更新时直接进入菜单，失败时继续使用当前版本。待确认期间跳过自动升级，避免阻断确认。紧急 CLI 命令不访问网络；不安排后台定时升级。信任官方域名及 HTTPS 证书链，SHA256 用于文件完整性校验，不是独立数字签名或防降级机制。旧版本仍依赖 GitHub Raw 或没有在线升级功能时，重新执行安装命令即可切换到新版。
+默认安装、版本检测和在线升级只访问 https://beman.teadan.com ，不要求客户端访问 GitHub 域名。升级通过 HTTPS 获取安装器与 Python 主程序，验证安装器中固定的 SHA256 和 Python/Bash 语法，不允许下载重定向；发布文件尚未同步或校验失败时拒绝升级。每次打开交互工具箱时自动检查系统依赖、程序与资源清单、白名单、SSH 服务和策略，并检测升级。成功后自动打开新版；检测结果按 Enter 后进入菜单。在本地完整性正常且没有待确认规则时，自动尝试补齐缺失的普通依赖；不会在启动检查时重装 SSH、强制升级 Python 或覆盖未知配置。未解决的依赖或完整性异常会跳过自动升级。待确认期间跳过自动升级，避免阻断确认。紧急 CLI 命令不访问网络；不安排后台定时升级。信任官方域名及 HTTPS 证书链，SHA256 用于文件完整性校验，不是独立数字签名或防降级机制。旧版本仍依赖 GitHub Raw 或没有在线升级功能时，重新执行安装命令即可切换到新版。
 
 旧版配置自动迁移至两个字段，保留现有用户/IP，移除旧端口及回滚时间参数。旧版嵌套格式原配置备份至 /opt/beman/backups/settings-before-simplification.json。已有 SSH 防护规则不会改变；旧版自有 beman.service 将停用并移除。若旧版存在待确认策略或网络隔离记录，必须先通过旧版确认/停止防护或解除隔离后升级。旧日志与数据卷保持原状，不自动解锁或删除任何数据。
 
@@ -89,6 +90,7 @@ beman update
 ├── beman.py
 ├── install.sh
 ├── settings.json
+├── manifest.json  # BeMan 资源清单
 └── backups/      # SSH策略状态及迁移备份
 /usr/local/bin/beman
 /etc/ssh/sshd_config.d/00-beman.conf  # 启动后生成
@@ -98,9 +100,9 @@ beman update
 
 BeMan 仅管理标准 Ubuntu/Debian OpenSSH 配置，存在其他 Match、AllowUsers、DenyUsers、AllowGroups、DenyGroups 或非标准 Include 时拒绝应用。不会修改其他防火墙、存储、本地控制台或远程入口。拥有 root 权限的人仍可绕过本机规则。不要提交真实配置、密钥或日志。
 
-当前新版本已进行隔离模拟测试，真实 Ubuntu/systemd（包括跨重启回滚）仍需实机验收。
+v3.0 启动检查属于本地诊断，不是对 root 篡改的独立证明。系统审计日志与全局运行时安装锁保留；未知文件不删除。真实 Ubuntu/systemd（包括跨重启回滚）仍需实机验收。
 
-版本规则：当前版本为 1.3，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
+版本规则：当前版本为 v3.0（内部比较值 3，兼容旧版升级器），大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
 
 交互菜单自动清屏，用户、IP 与操作区分别使用分割线；操作结果保留至按 Enter 返回。非交互命令不清屏。
 
