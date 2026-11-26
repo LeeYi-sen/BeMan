@@ -19,6 +19,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+VERSION = '1'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -328,7 +329,7 @@ class Console:
 
     @classmethod
     def title(cls, text):
-        print('\n'+cls.color('BeMan  /  '+text,'1;36'))
+        print('\n'+cls.color('BeMan '+VERSION+'  /  '+text,'1;36'))
         print(cls.color('─'*48,'90'))
 
     @staticmethod
@@ -346,6 +347,21 @@ class Release:
     BASE='https://beman.teadan.com'
     MAX_SIZE=2_000_000
 
+    @staticmethod
+    def version_key(version):
+        need(re.fullmatch(r'[1-9][0-9]{0,8}(?:\.[1-9][0-9]{0,8})?',version) is not None,'版本号无效：'+version)
+        parts=version.split('.')
+        return int(parts[0]),int(parts[1]) if len(parts)==2 else 0
+
+    @classmethod
+    def declared_version(cls,data,installer=False):
+        pattern=rb'^BEMAN_VERSION="([^"\r\n]*)"$' if installer else rb"^VERSION = '([^'\r\n]*)'$"
+        matches=re.findall(pattern,data,re.M)
+        need(len(matches)==1,'发布文件缺少唯一版本号')
+        version=matches[0].decode('ascii')
+        cls.version_key(version)
+        return version
+
     @classmethod
     def fetch(cls,url):
         req=urllib.request.Request(url,headers={'Cache-Control':'no-cache','User-Agent':'BeMan-Updater'})
@@ -358,36 +374,45 @@ class Release:
     @classmethod
     def inspect(cls):
         installer=cls.fetch(cls.BASE+'/install.sh')
+        published=cls.declared_version(installer,installer=True)
         matches=re.findall(rb'^PYTHON_SHA256="([a-f0-9]{64})"$',installer,re.M)
         need(len(matches)==1,'安装器缺少唯一有效SHA256')
         digest=matches[0].decode()
         source=cls.fetch(cls.BASE+'/beman.py')
         need(hashlib.sha256(source).hexdigest()==digest,'发布文件SHA256不一致，可能尚未同步；请稍后重试')
         compile(source,str(SELF),'exec')
-        local=hashlib.sha256(SELF.read_bytes()).hexdigest()
+        need(cls.declared_version(source)==published,'安装器与Python版本不一致')
+        local_source=SELF.read_bytes()
+        local_version=cls.declared_version(local_source)
         saved=ROOT/'install.sh'
         same_installer=saved.is_file() and not saved.is_symlink() and saved.read_bytes()==installer
-        return installer,digest,local,local!=digest or not same_installer
+        same_source=hashlib.sha256(local_source).hexdigest()==digest
+        if cls.version_key(published)==cls.version_key(local_version):
+            need(same_source and same_installer,'同一版本的发布文件发生变化，请检查发布版本或重新下载安装器修复')
+        return installer,digest,local_version,published
 
     @classmethod
     def update(cls,check_only=False):
         Console.say('正在检测官方发布…')
-        installer,digest,local,changed=cls.inspect()
-        print('本地版本：'+local[:12]+'  发布版本：'+digest[:12])
-        if not changed:
+        installer,digest,local,published=cls.inspect()
+        print('本地版本：'+local)
+        print('最新版本：'+published)
+        if cls.version_key(published)<cls.version_key(local):
+            Console.say('发布版本低于本地版本，拒绝自动降级','warn'); return False
+        if published==local:
             Console.say('已是最新版本','ok'); return False
-        Console.say('检测到新版本或安装器变更','warn')
+        Console.say('发现新版本 '+published,'warn')
         if check_only: return False
         need(not SSHGuard.PENDING.exists(),'请先确认或停止SSH策略')
         with tempfile.TemporaryDirectory(prefix='beman-release-') as tmp:
             path=Path(tmp)/'install.sh'; path.write_bytes(installer); path.chmod(0o700)
             run('bash','-n',str(path))
-            # Do not hold operation.lock: the installer invokes beman init.
+            # The installer acquires its own install and operation locks.
             p=run('bash',str(path),cls.BASE,timeout=180)
             print(p.stdout,end='')
         need(hashlib.sha256(SELF.read_bytes()).hexdigest()==digest,'升级后版本校验失败')
         need((ROOT/'install.sh').read_bytes()==installer,'升级后安装器校验失败')
-        Console.say('升级完成；白名单及SSH策略已保留','ok')
+        Console.say('升级成功：'+local+' → '+published+'；白名单及SSH策略已保留','ok')
         return True
 
 
@@ -573,10 +598,12 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','check-update','update','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('--version',action='version',version='BeMan '+VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
         args=parser.parse_args(); op=args.operation
+        if op=='version': print('BeMan '+VERSION); return
         root_check()
         if op=='menu': Toolbox.menu(); return
         if op in ('start','restart','apply','reload'): cls.start(); return

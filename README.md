@@ -47,6 +47,7 @@ beman
 | `beman logs` | 读取最近 50 条 SSH 系统日志 |
 | `beman check-update` | 检测版本，不安装 |
 | `beman update` | 检测并升级 |
+| `beman version` | 查看版本号（也支持 `beman --version`） |
 | `beman uninstall` | 确认后完整卸载 BeMan，保留系统 SSH 和依赖 |
 
 首次启动或规则改变时，保留旧 SSH 会话，从白名单 IP 以允许用户建立**新的公钥 SSH 连接**，再次执行 start 确认。默认 300 秒未确认则尝试自动回滚。请勿依赖定时器作为唯一恢复途径；确认前不要重启服务器。若新会话无法登录，从原会话或控制台执行 stop。停止不会强制开放其他原本被系统策略禁止的登录，也不会断开已有 SSH 会话。
@@ -99,5 +100,7 @@ beman update
 BeMan 仅管理标准 Ubuntu/Debian OpenSSH 配置，存在其他 Match、AllowUsers、DenyUsers、AllowGroups、DenyGroups 或非标准 Include 时拒绝应用。不会修改其他防火墙、存储、本地控制台或远程入口。拥有 root 权限的人仍可绕过本机规则。不要提交真实配置、密钥或日志。
 
 当前新版本已进行隔离模拟测试，真实 Ubuntu/systemd（包括跨重启回滚）仍需实机验收。
+
+版本规则：当前正式版为 1，大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
 
 发布：GitHub main → https://beman.teadan.com 。更新 beman.py 时必须同步更新 install.sh 内的 PYTHON_SHA256。

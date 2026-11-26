@@ -6,7 +6,8 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-PYTHON_SHA256="a59064247e78a265c479d4ab681ec271543166e269d525f0dfbecb3ad7bed2d3"
+BEMAN_VERSION="1"
+PYTHON_SHA256="f574d326128fb99cc4dac0a1b97a02fd7810ecdcfa37e51a009806df19d6bb80"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -48,6 +49,40 @@ cp -- "${BASH_SOURCE[0]}" "$TMP/install.sh"
 wget --https-only --max-redirect=0 --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
 printf '%s  %s\n' "$PYTHON_SHA256" "$TMP/beman.py" | sha256sum -c - || fail 'SHA256校验失败，未安装'
 python3 -m py_compile "$TMP/beman.py" || fail 'Python语法校验失败'
+python3 - "$TMP/beman.py" "$ROOT/beman.py" "$BEMAN_VERSION" "$TMP/install.sh" "$ROOT/install.sh" <<'PY' || fail '版本校验失败，未安装'
+import pathlib
+import re
+import sys
+
+new, old, version, new_installer, old_installer = sys.argv[1:]
+def key(v):
+    if not re.fullmatch(r'[1-9][0-9]{0,8}(?:\.[1-9][0-9]{0,8})?', v):
+        raise SystemExit('无效版本号')
+    major, _, minor = v.partition('.')
+    return int(major), int(minor or 0)
+
+def declared(data):
+    matches = re.findall(rb"^VERSION = '([^'\r\n]*)'$", data, re.M)
+    if len(matches) != 1:
+        raise SystemExit('Python版本声明无效')
+    return matches[0].decode('ascii')
+
+source = pathlib.Path(new).read_bytes()
+if declared(source) != version:
+    raise SystemExit('安装器与Python版本不一致')
+target = key(version)
+if pathlib.Path(old).is_file():
+    previous = pathlib.Path(old).read_bytes()
+    if re.search(rb'^VERSION\s*=', previous, re.M):
+        current = key(declared(previous))
+        if current > target:
+            raise SystemExit('拒绝降级')
+        if current == target:
+            if previous != source or (pathlib.Path(old_installer).is_file() and pathlib.Path(old_installer).read_bytes() != pathlib.Path(new_installer).read_bytes()):
+                raise SystemExit('同版本发布文件不一致，请检查版本号')
+    else:
+        print('旧版无数字版本号，迁移至 BeMan '+version)
+PY
 for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$UNIT:unit"; do
     path=${pair%:*}; name=${pair##*:}; if [[ -f "$path" ]]; then cp -p -- "$path" "$TMP/$name.old"; fi
 done
@@ -82,7 +117,7 @@ install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load()'
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
 trap - ERR
-ok "BeMan 已安装/升级：$ROOT"
+ok "BeMan $BEMAN_VERSION 已安装/升级：$ROOT"
 info '输入 beman 打开 SSH 管理工具箱；输入 beman update 自动升级'
 info '无常驻服务；原有 SSH 策略未改变。'
 info '首次启用或修改白名单时，保留旧会话，从新白名单SSH会话再次启动确认。'

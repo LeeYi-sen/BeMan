@@ -47,6 +47,7 @@ Shortcut commands:
 | `beman logs` | Read the last 50 SSH journal entries |
 | `beman check-update` | Detect versions without installing |
 | `beman update` | Detect and install updates |
+| `beman version` | Show version (also `beman --version`) |
 | `beman uninstall` | Confirm and uninstall BeMan, preserving system SSH and dependencies |
 
 For initial activation or changed rules, keep the old session open. Establish a **new public-key SSH session** from an allowed IP using an allowed user, and run start again to confirm. The default 300-second timeout attempts rollback if not confirmed. Do not rely on the timer as your only recovery channel or reboot before confirmation. If login fails, run stop from the old session or local console. Stopping does not override other system access restrictions or disconnect existing SSH sessions.
@@ -99,5 +100,7 @@ Temporary systemd rollback timer/oneshot units exist only while confirmation is 
 BeMan manages standard Ubuntu/Debian OpenSSH configurations. Existing Match, AllowUsers, DenyUsers, AllowGroups, DenyGroups or nonstandard Include rules require manual review. Other firewalls, storage, local consoles and remote entry points remain untouched. Root access can bypass local rules. Never commit live settings, keys or logs.
 
 The new version has isolated mock tests; real Ubuntu/systemd acceptance, including rollback across reboot, is still outstanding.
+
+Versioning: the initial stable release is 1. Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata. Legacy installations without a numeric version can migrate once; no extra version file is needed.
 
 Publishing: GitHub main → https://beman.teadan.com . When beman.py changes, update PYTHON_SHA256 in install.sh.
