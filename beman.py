@@ -24,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.4'
-DISPLAY_VERSION = 'v3.4'
+VERSION = '3.5'
+DISPLAY_VERSION = 'v3.5'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -697,6 +697,107 @@ class LogPrivacy:
         Console.say('加密摘要已保存（0600）；由管理员自行保管，卸载不会删除。', 'ok')
 
 
+class StrangerWatch:
+    """只读巡检非白名单登录；对每个陌生会话按固定参数执行一次 ls 记录现场。
+
+    不写入任何终端，不改变会话权限，不删除记录。
+    """
+    LIMIT = 200
+    ACCEPTED = re.compile(r'^Accepted (\S+(?:/\S+)?) for (\S+) from (\S+) port (\d+)')
+    LS_MAX_LINES = 40
+
+    @classmethod
+    def entries(cls):
+        result = run('journalctl', '-u', SSH_SERVICE, '-n', str(cls.LIMIT),
+                     '--no-pager', '--output=json', check=False)
+        need(result.returncode == 0, '无法读取 SSH 日志，请检查系统日志服务及权限')
+        out = []
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            message = entry.get('MESSAGE', '')
+            if not isinstance(message, str):
+                continue
+            match = cls.ACCEPTED.match(message)
+            if not match:
+                continue
+            out.append({'method': match[1], 'user': match[2], 'ip': match[3],
+                        'port': int(match[4]), 'stamp': cls.stamp(entry)})
+        return out
+
+    @staticmethod
+    def stamp(entry):
+        try:
+            return datetime.datetime.fromtimestamp(int(entry['__REALTIME_TIMESTAMP']) / 1e6).strftime('%m-%d %H:%M:%S')
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            return '未知时间'
+
+    @classmethod
+    def strangers(cls, entries, config):
+        users, allowed = set(config['allowed_users']), set(config['allowed_ips'])
+        found = []
+        for entry in entries:
+            reasons = []
+            if entry['user'] not in users:
+                reasons.append('用户不在白名单')
+            if entry['ip'] not in allowed:
+                reasons.append('IP 不在白名单')
+            if reasons:
+                found.append(dict(entry, reason='、'.join(reasons)))
+        return found
+
+    @classmethod
+    def listing(cls, user):
+        # 固定参数、固定目录、不经 shell；仅用于管理员核对现场，不回显给登录方。
+        try:
+            home = pwd.getpwnam(user).pw_dir
+        except KeyError:
+            home = '/root'
+        result = run('ls', '-la', '--', home, check=False, timeout=10)
+        if result.returncode:
+            return home, f'ls 执行失败（退出码 {result.returncode}）'
+        lines = result.stdout.splitlines()
+        body = '\n'.join(lines[:cls.LS_MAX_LINES])
+        if len(lines) > cls.LS_MAX_LINES:
+            body += f'\n… 其余 {len(lines) - cls.LS_MAX_LINES} 行未显示'
+        return home, body
+
+    @classmethod
+    def report(cls):
+        Console.title('陌生登录巡检')
+        with locked():
+            config = ConfigManager.load()
+        entries = cls.entries()
+        found = cls.strangers(entries, config)
+        Console.result('扫描登录', f'最近 {len(entries)} 条成功登录，其中非白名单 {len(found)} 条',
+                       'warn' if found else 'ok')
+        if not found:
+            Console.say('未发现非白名单登录。', 'ok')
+            return
+        print(f'{"时间":<15}{"用户":<12}{"来源 IP":<18}{"方式":<20}判定')
+        Console.divider()
+        for entry in found:
+            print(f'{entry["stamp"]:<15}{entry["user"]:<12}{entry["ip"]:<18}'
+                  f'{entry["method"]:<20}{entry["reason"]}')
+        Console.divider()
+        seen = []
+        for entry in found:
+            if entry['user'] in seen:
+                continue
+            seen.append(entry['user'])
+            home, body = cls.listing(entry['user'])
+            print(Console.color(f'[{entry["user"]}] ls -la {home}', '36'))
+            print(body)
+            Console.divider()
+        Console.say('以上仅为管理员侧现场记录；ls 不改变会话权限，也不会阻止对方操作。', 'warn')
+
+
 class CacheMaintenance:
     """Maintain only reproducible BeMan Python build cache."""
     CACHE_NAME = re.compile(r'beman\.cpython-\d{2,3}(?:\.opt-[12])?\.pyc')
@@ -927,11 +1028,11 @@ class Toolbox:
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志管理','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志管理','34'),('7  陌生登录巡检','34'),('8  检查更新','34'),('9  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
-                choice=Console.ask('请选择 [0-8]：')
+                choice=Console.ask('请选择 [0-9]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
                     Console.clear()
@@ -942,13 +1043,16 @@ class Toolbox:
                 elif choice=='6':
                     cls.logs_menu()
                     continue
-                elif choice=='8':
+                elif choice=='7':
+                    Console.clear()
+                    cls.call('stranger')
+                elif choice=='9':
                     Console.clear()
                     Console.title('卸载 BeMan')
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
                     else: continue
-                elif choice=='7':
+                elif choice=='8':
                     cls.update_menu()
                 else: Console.say('无效选项','warn')
                 Console.pause()
@@ -1110,7 +1214,7 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','stranger','clean-cache','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
         parser.add_argument('--version',action='version',version='BeMan '+DISPLAY_VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
@@ -1128,6 +1232,7 @@ class Beman:
         if op in ('log-summary-ssh','log-summary-audit'):
             LogPrivacy.report('ssh' if op=='log-summary-ssh' else 'beman'); return
         if op=='log-status': LogPrivacy.status(); return
+        if op=='stranger': StrangerWatch.report(); return
         if op=='clean-cache': CacheMaintenance.clean(); return
         if op=='logs':
             Console.title('SSH 登录日志')
@@ -1157,7 +1262,7 @@ class Beman:
 if __name__=='__main__':
     try:
         op=sys.argv[1] if len(sys.argv)>1 else 'menu'
-        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache')
+        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status','stranger','clean-cache')
         if sensitive: audit(op,'requested')
         Beman.main()
         if sensitive: audit(op,'returned')
