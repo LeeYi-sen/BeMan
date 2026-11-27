@@ -1,5 +1,0 @@
-.env
-data/*
-backups/*
-logs/*
-__pycache__/

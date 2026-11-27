@@ -1,3 +1,0 @@
-# Management Center architecture
-
-Browser → local session authenticated web app → center SQLite (sites, jobs, schedules, audit). Scheduler uses persistent task queue; per-site serial tasks, four independent sites in parallel. Remote requests use distinct credentials, HMAC signatures and HTTPS certificate verification, redirects disabled. Only site API calls cross hosts; no access to remote DB or files. Credentials encrypted at rest with deployment master key. Management policy generates snapshots, dispatches bounded remote work, and persists task status/progress. The site can be available while center is unavailable. See backend/store.py for schema and client.py for the signed client.
