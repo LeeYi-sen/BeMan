@@ -22,10 +22,11 @@ import syslog
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from pathlib import Path
 
-VERSION = '3.9'
-DISPLAY_VERSION = 'v3.9'
+VERSION = '3.10'
+DISPLAY_VERSION = 'v3.10'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -882,43 +883,31 @@ class Toolbox:
                 Console.say(str(e),'error')
             Console.pause('按 Enter 返回白名单管理…')
 
-    @classmethod
-    def logs_menu(cls):
-        while True:
-            Console.clear()
-            Console.title('日志清理')
-            for label, color in [('[1] SSH 登录统计（脱敏）','34'),
-                                 ('[2] BeMan 审计统计（脱敏）','34'),
-                                 ('[3] 查看原始 SSH 及 BeMan 日志','34'),
-                                 ('[4] 日志权限、容量与保留状态','34'),
-                                 ('[5] 加密导出脱敏统计','34'),
-                                 ('[6] 一键清理 BeMan 程序缓存','33'),
-                                 ('[0] 返回主菜单','90')]:
-                print(Console.color(label,color))
-            Console.divider()
-            choice = Console.ask('请选择 [0-6]：')
-            if choice == '0':
-                return
-            Console.clear()
-            if choice in ('1', '2', '4'):
-                cls.call({'1':'log-summary-ssh','2':'log-summary-audit','4':'log-status'}[choice])
-            elif choice == '3':
-                if Console.ask('原始日志含敏感身份信息，确认在授权环境查看？[y/N]：').lower() == 'y':
-                    cls.call('logs')
-            elif choice == '5':
-                audit('log-export','requested')
-                try:
-                    LogPrivacy.export()
-                except (BemanError,OSError,ValueError) as e:
-                    audit('log-export','failed')
-                    Console.say(str(e),'error')
-                else:
-                    audit('log-export','returned')
-            elif choice == '6':
-                cls.call('clean-cache')
-            else:
-                Console.say('无效选项','warn')
-            Console.pause('按 Enter 返回日志清理…')
+    @staticmethod
+    def send_message():
+        Console.clear()
+        Console.title('发送信息')
+        url=os.environ.get('BEMAN_ALERT_URL','').strip()
+        if not url:
+            Console.say('尚未配置 BEMAN_ALERT_URL，未发送','warn')
+            return
+        try:
+            target=urlsplit(url)
+            need(target.scheme=='https' and target.hostname and not target.username and not target.password and not target.fragment,'请输入有效的 HTTPS 通知地址')
+            payload={'event':'manual_test','hostname':os.uname().nodename,
+                     'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                     'version':VERSION}
+            request=urllib.request.Request(url,data=json.dumps(payload).encode('utf-8'),
+                                           headers={'Content-Type':'application/json'},method='POST')
+            audit('send-message','requested')
+            with urllib.request.build_opener(NoRedirect()).open(request,timeout=5) as response:
+                need(200<=response.status<300,'通知接口未返回成功状态')
+        except (BemanError,OSError,ValueError,http.client.HTTPException):
+            audit('send-message','failed')
+            Console.say('发送失败，请检查 HTTPS 地址或接收服务','error')
+            return
+        audit('send-message','success')
+        Console.say('信息发送成功','ok')
 
     @classmethod
     def menu(cls):
@@ -930,7 +919,7 @@ class Toolbox:
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志清理','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  发送信息','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
@@ -943,8 +932,7 @@ class Toolbox:
                     cls.whitelist()
                     continue
                 elif choice=='6':
-                    cls.logs_menu()
-                    continue
+                    cls.send_message()
                 elif choice=='8':
                     Console.clear()
                     Console.title('卸载 BeMan')
