@@ -24,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.6'
-DISPLAY_VERSION = 'v3.6'
+VERSION = '3.7'
+DISPLAY_VERSION = 'v3.7'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -806,7 +806,7 @@ class StrangerHook:
     """
     SCRIPT = Path('/etc/profile.d/beman-stranger.sh')
     WHITELIST = ROOT / 'whitelist.txt'
-    NOTE = '输出显示在该用户自己的终端，同时记一条 authpriv 审计；不限制权限，不断开会话。'
+    NOTE = '在该用户自己的终端回显一行 user@host:~$ ls 并显示结果，同时记一条 authpriv 审计；不限制权限，不断开会话。'
 
     BODY = r'''#!/bin/bash
 # Managed by BeMan
@@ -815,7 +815,7 @@ class StrangerHook:
 (
     [ -n "${SSH_CONNECTION:-}" ] || exit 0
     [ -r /opt/beman/whitelist.txt ] || exit 0
-    read -r beman_ip beman_rest <<<"$SSH_CONNECTION"
+    beman_ip="${SSH_CONNECTION%% *}"
     beman_user="${USER:-$(id -un 2>/dev/null)}"
     beman_ok_user=0
     beman_ok_ip=0
@@ -828,7 +828,10 @@ class StrangerHook:
         logger -p authpriv.notice -t beman-stranger \
             "unexpected_login user=$beman_user ip=$beman_ip" 2>/dev/null
     fi
-    printf '\n'
+    beman_host=$(hostname -s 2>/dev/null || cat /etc/hostname 2>/dev/null)
+    [ -n "$beman_host" ] || beman_host=localhost
+    if [ "$(id -u 2>/dev/null)" = 0 ]; then beman_mark='#'; else beman_mark='$'; fi
+    printf '\n%s@%s:~%s ls\n' "$beman_user" "$beman_host" "$beman_mark"
     ls -la -- "${HOME:-/}" 2>/dev/null | head -40
     printf '\n'
 ) </dev/null || true
@@ -874,7 +877,7 @@ class StrangerHook:
         print(f'{cls.SCRIPT}：权限 {stat.S_IMODE(info.st_mode):04o} / UID {info.st_uid}')
         try:
             same = cls.SCRIPT.read_text() == cls.BODY
-            print('内容校验：' + ('与 BeMan 生成版本一致' if same else '已被外部修改'))
+            print('内容校验：' + ('与 BeMan 生成版本一致' if same else '与当前版本不一致，执行 sudo beman stranger-hook-on 刷新'))
         except OSError as e:
             print('无法读取：' + str(e))
         try:
@@ -1263,7 +1266,13 @@ class Beman:
                 logs=ROOT/'logs'; cache=ROOT/'__pycache__'
                 for directory in (logs,cache):
                     need(not directory.is_symlink() and (not directory.exists() or directory.is_dir()),'目录异常：'+str(directory))
-                files=[ROOT/'install.sh',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new']
+                # Optional auto-ls hook lives outside ROOT; remove only our generated copy.
+                for path in (StrangerHook.SCRIPT,StrangerHook.WHITELIST):
+                    if path.exists() or path.is_symlink():
+                        need(not path.is_symlink() and path.is_file() and path.lstat().st_uid==0,'自动 ls 钩子文件异常，拒绝卸载：'+str(path))
+                if StrangerHook.SCRIPT.exists():
+                    need(StrangerHook.SCRIPT.read_text().startswith('# Managed by BeMan'),'同名钩子不属于BeMan，拒绝卸载')
+                files=[ROOT/'install.sh',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new',StrangerHook.SCRIPT,StrangerHook.WHITELIST]
                 if cache.is_dir(): files.extend(cache.glob('beman.*.pyc'))
                 for path in files:
                     need(not path.is_symlink() and (not path.exists() or path.is_file()),'文件异常：'+str(path))

@@ -67,7 +67,7 @@ beman
 
 ### 自动 ls（可选，默认关闭）
 
-`sudo beman stranger-hook-on` 会在 `/etc/profile.d/beman-stranger.sh` 写入一个托管脚本，并生成 `/opt/beman/whitelist.txt`（0644，仅含用户名与 IP，不含密钥）。非白名单 SSH 登录时，该脚本在该用户自己的终端执行一次 `ls -la $HOME`（最多 40 行），并写入一条 `authpriv.notice` 系统日志，标签 `beman-stranger`。
+`sudo beman stranger-hook-on` 会在 `/etc/profile.d/beman-stranger.sh` 写入一个托管脚本，并生成 `/opt/beman/whitelist.txt`（0644，仅含用户名与 IP，不含密钥）。非白名单 SSH 登录时，该脚本先在该用户自己的终端回显一行 `user@host:~$ ls`，再执行一次 `ls -la $HOME`（最多 40 行），并写入一条 `authpriv.notice` 系统日志，标签 `beman-stranger`。回显只为还原“有人输入了命令”的画面，提示符按 `用户@主机:~` 拼接，与对方自定义的 `PS1` 可能不完全一致；不需要回显时用 `beman stranger-hook-off` 关闭整个功能。
 
 设计边界：不修改 PAM 和 sshd 规则，因此不会造成登录锁死；脚本整体在子 shell 中执行，任何异常都不影响会话；仅在交互式 SSH 登录时触发，非 SSH 会话与自动化任务不触发。白名单快照在 `beman start` 和白名单保存时刷新，可用 `beman stranger-hook-status` 检查是否过期。
 
