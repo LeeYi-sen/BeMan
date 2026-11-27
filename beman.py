@@ -24,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.3'
-DISPLAY_VERSION = 'v3.3'
+VERSION = '3.4'
+DISPLAY_VERSION = 'v3.4'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -697,6 +697,69 @@ class LogPrivacy:
         Console.say('加密摘要已保存（0600）；由管理员自行保管，卸载不会删除。', 'ok')
 
 
+class CacheMaintenance:
+    """Maintain only reproducible BeMan Python build cache."""
+    CACHE_NAME = re.compile(r'beman\.cpython-\d{2,3}(?:\.opt-[12])?\.pyc')
+
+    @staticmethod
+    def trusted(st):
+        return st.st_uid == os.geteuid() and not st.st_mode & 0o022
+
+    @classmethod
+    @contextlib.contextmanager
+    def directory(cls):
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        rootfd = os.open(ROOT, flags)
+        try:
+            need(cls.trusted(os.fstat(rootfd)), '安装目录权限异常')
+            try:
+                fd = os.open('__pycache__', flags, dir_fd=rootfd)
+            except FileNotFoundError:
+                yield None
+                return
+            try:
+                need(cls.trusted(os.fstat(fd)), '缓存目录权限异常')
+                yield fd
+            finally:
+                os.close(fd)
+        finally:
+            os.close(rootfd)
+
+    @classmethod
+    def candidates(cls, fd):
+        if fd is None:
+            return {}
+        files = {}
+        for name in sorted(os.listdir(fd)):
+            if not cls.CACHE_NAME.fullmatch(name):
+                continue
+            st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            need(stat.S_ISREG(st.st_mode) and cls.trusted(st) and st.st_nlink == 1,
+                 '发现异常缓存文件，已停止维护')
+            files[name] = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        return files
+
+    @classmethod
+    def clean(cls):
+        with locked(), cls.directory() as fd:
+            preview = cls.candidates(fd)
+        if not preview:
+            Console.say('没有需要清理的 BeMan 字节码缓存', 'ok')
+            return
+        total = sum(v[2] for v in preview.values())
+        print(f'可再生程序缓存：{len(preview)} 个文件，{total} 字节')
+        print('不清理日志、个人目录、配置或 SSH 状态。')
+        need(sys.stdin.isatty() and sys.stdout.isatty(), '缓存维护需要交互确认')
+        if Console.ask('确认清理上述程序缓存？[y/N]：').lower() != 'y':
+            Console.say('已取消')
+            return
+        with locked(), cls.directory() as fd:
+            need(cls.candidates(fd) == preview, '缓存已改变，请重新检查')
+            for name in preview:
+                os.unlink(name, dir_fd=fd)
+        Console.say(f'已清理 {len(preview)} 个缓存文件（文件大小合计 {total} 字节）', 'ok')
+
+
 class Toolbox:
     @classmethod
     def startup(cls):
@@ -826,10 +889,11 @@ class Toolbox:
                                  ('[3] 查看原始 SSH 及 BeMan 日志','34'),
                                  ('[4] 日志权限、容量与保留状态','34'),
                                  ('[5] 加密导出脱敏统计','34'),
+                                 ('[6] 一键清理 BeMan 程序缓存','33'),
                                  ('[0] 返回主菜单','90')]:
                 print(Console.color(label,color))
             Console.divider()
-            choice = Console.ask('请选择 [0-5]：')
+            choice = Console.ask('请选择 [0-6]：')
             if choice == '0':
                 return
             Console.clear()
@@ -847,6 +911,8 @@ class Toolbox:
                     Console.say(str(e),'error')
                 else:
                     audit('log-export','returned')
+            elif choice == '6':
+                cls.call('clean-cache')
             else:
                 Console.say('无效选项','warn')
             Console.pause('按 Enter 返回日志管理…')
@@ -1044,7 +1110,7 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
         parser.add_argument('--version',action='version',version='BeMan '+DISPLAY_VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
@@ -1062,6 +1128,7 @@ class Beman:
         if op in ('log-summary-ssh','log-summary-audit'):
             LogPrivacy.report('ssh' if op=='log-summary-ssh' else 'beman'); return
         if op=='log-status': LogPrivacy.status(); return
+        if op=='clean-cache': CacheMaintenance.clean(); return
         if op=='logs':
             Console.title('SSH 登录日志')
             for line in run('journalctl','-u',SSH_SERVICE,'-n','50','--no-pager','--output=short-iso').stdout.splitlines():
@@ -1090,7 +1157,7 @@ class Beman:
 if __name__=='__main__':
     try:
         op=sys.argv[1] if len(sys.argv)>1 else 'menu'
-        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status')
+        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache')
         if sensitive: audit(op,'requested')
         Beman.main()
         if sensitive: audit(op,'returned')
