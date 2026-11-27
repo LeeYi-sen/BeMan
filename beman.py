@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import fcntl
+import grp
 import hashlib
 import http.client
 import ipaddress
@@ -23,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.2'
-DISPLAY_VERSION = 'v3.2'
+VERSION = '3.3'
+DISPLAY_VERSION = 'v3.3'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -572,6 +573,130 @@ class Release:
         return True
 
 
+class LogPrivacy:
+    """Read-only audit summaries; source journal and login records are retained."""
+    SOURCES = {'ssh': ('-u', SSH_SERVICE), 'beman': ('-t', 'beman')}
+    LABELS = {'ssh': 'SSH 登录', 'beman': 'BeMan 审计'}
+
+    @classmethod
+    def summary(cls, source):
+        need(source in cls.SOURCES, '不支持的日志类型')
+        result = run('journalctl', *cls.SOURCES[source], '-n', '50',
+                     '--no-pager', '--output=json', check=False)
+        need(result.returncode == 0, '无法读取日志，请检查系统日志服务及权限')
+        counts = {'SSH 登录成功': 0, 'SSH 登录失败或拒绝': 0,
+                  'SSH 连接结束': 0, '操作请求': 0, '操作返回': 0,
+                  '操作成功': 0, '操作失败': 0, '其他记录': 0}
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            category = '其他记录'
+            try:
+                entry = json.loads(line)
+                message = entry.get('MESSAGE', '') if isinstance(entry, dict) else ''
+            except ValueError:
+                message = ''
+            if isinstance(message, str):
+                if source == 'ssh':
+                    if message.startswith(('Accepted publickey ', 'Accepted password ', 'Accepted keyboard-interactive')):
+                        category = 'SSH 登录成功'
+                    elif message.startswith(('Failed ', 'Invalid user ')) or 'not allowed because' in message:
+                        category = 'SSH 登录失败或拒绝'
+                    elif message.startswith(('Disconnected from ', 'Connection closed by ', 'Received disconnect ')):
+                        category = 'SSH 连接结束'
+                else:
+                    match = re.fullmatch(r'operation=[a-z-]+ result=(requested|returned|success|failed) uid=\d+ euid=\d+', message)
+                    if match:
+                        category = {'requested': '操作请求', 'returned': '操作返回',
+                                    'success': '操作成功', 'failed': '操作失败'}[match[1]]
+            counts[category] += 1
+        # Only fixed labels and counts leave this function; no raw message,
+        # timestamp, address, host, user, UID, key fingerprint or metadata.
+        labels = list(counts)[:3] if source == 'ssh' else list(counts)[3:7]
+        return {'type': cls.LABELS[source], 'total': sum(counts.values()),
+                'counts': {k: counts[k] for k in labels + ['其他记录']}}
+
+    @classmethod
+    def report(cls, source):
+        print(json.dumps(cls.summary(source), ensure_ascii=False, indent=2))
+        Console.say('仅显示最近最多 50 条日志的分类统计；原始记录完整保留。')
+
+    @staticmethod
+    def status():
+        Console.title('日志访问与保留状态')
+        result = run('journalctl', '--disk-usage', '--no-pager', check=False)
+        print('Journal 空间：' + (result.stdout.strip() if result.returncode == 0 else '无法读取'))
+        for path in ('/var/log/journal', '/run/log/journal', '/var/log/auth.log'):
+            try:
+                st = Path(path).stat()
+                print(f'{path}：权限 {stat.S_IMODE(st.st_mode):04o} / UID {st.st_uid} / GID {st.st_gid}')
+            except OSError:
+                print(path + '：不存在或无法读取')
+        for group in ('adm', 'systemd-journal'):
+            try:
+                entry = grp.getgrnam(group)
+                print(f'{group}：GID {entry.gr_gid} / 显式成员 {len(entry.gr_mem)} 人')
+            except KeyError:
+                print(group + '：组不存在')
+        print('以上不包含完整 ACL、主组成员或外部授权；不能据此认定所有读取权限。')
+        keys = ('Storage', 'SystemMaxUse', 'RuntimeMaxUse', 'SystemKeepFree',
+                'RuntimeKeepFree', 'MaxRetentionSec', 'MaxFileSec')
+        configured = {}
+        if shutil.which('systemd-analyze'):
+            result = run('systemd-analyze', 'cat-config', 'systemd/journald.conf', check=False)
+            if result.returncode == 0:
+                section = ''
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith('[') and line.endswith(']'):
+                        section = line[1:-1]
+                    elif section == 'Journal' and '=' in line:
+                        key, value = (s.strip() for s in line.split('=', 1))
+                        if key in keys and re.fullmatch(r'[A-Za-z0-9. \t]*', value):
+                            configured[key] = value
+        Console.divider()
+        print('Journal 配置文件声明（非运行时生效证明）：')
+        for key in keys:
+            print(key + '：' + (configured.get(key) or '未识别显式设置'))
+        Console.say('按组织审计和保留规范维护日志；本工具不修改权限、保留期限或原始记录。')
+
+    @classmethod
+    def export(cls):
+        need(shutil.which('gpg'), '加密导出需要系统已有 GnuPG（gpg），未自动安装')
+        need(sys.stdin.isatty() and sys.stdout.isatty(), '加密导出需要交互终端')
+        raw = Console.ask('输入新归档的绝对路径（.gpg，空行取消）：')
+        if not raw:
+            return
+        target = Path(raw)
+        need(target.is_absolute() and target.suffix == '.gpg', '需要绝对 .gpg 文件路径')
+        parent = target.parent.resolve(strict=True)
+        st = parent.stat()
+        need(stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o022,
+             '请选择 root 所有且组/其他用户不可写的目录')
+        target = parent / target.name
+        need(not target.exists() and not target.is_symlink(), '拒绝覆盖现有文件')
+        data = json.dumps([cls.summary('ssh'), cls.summary('beman')],
+                          ensure_ascii=False, indent=2).encode('utf-8')
+        Console.say('使用 GnuPG 安全口令提示，仅加密统计摘要，不包含原始日志。')
+        with tempfile.TemporaryDirectory(prefix='beman-gpg-') as home:
+            env = dict(os.environ, GPG_TTY=os.ttyname(sys.stdin.fileno()))
+            try:
+                result = subprocess.run(
+                    ['gpg', '--no-options', '--homedir', home, '--no-symkey-cache',
+                     '--symmetric', '--cipher-algo', 'AES256', '--output', '-'],
+                    input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env=env, timeout=120)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                raise BemanError('GnuPG 加密未完成') from e
+        need(result.returncode == 0 and bool(result.stdout), 'GnuPG 加密失败或取消')
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(result.stdout)
+            f.flush()
+            os.fsync(f.fileno())
+        Console.say('加密摘要已保存（0600）；由管理员自行保管，卸载不会删除。', 'ok')
+
+
 class Toolbox:
     @classmethod
     def startup(cls):
@@ -692,6 +817,41 @@ class Toolbox:
             Console.pause('按 Enter 返回白名单管理…')
 
     @classmethod
+    def logs_menu(cls):
+        while True:
+            Console.clear()
+            Console.title('日志管理')
+            for label, color in [('[1] SSH 登录统计（脱敏）','34'),
+                                 ('[2] BeMan 审计统计（脱敏）','34'),
+                                 ('[3] 查看原始 SSH 及 BeMan 日志','34'),
+                                 ('[4] 日志权限、容量与保留状态','34'),
+                                 ('[5] 加密导出脱敏统计','34'),
+                                 ('[0] 返回主菜单','90')]:
+                print(Console.color(label,color))
+            Console.divider()
+            choice = Console.ask('请选择 [0-5]：')
+            if choice == '0':
+                return
+            Console.clear()
+            if choice in ('1', '2', '4'):
+                cls.call({'1':'log-summary-ssh','2':'log-summary-audit','4':'log-status'}[choice])
+            elif choice == '3':
+                if Console.ask('原始日志含敏感身份信息，确认在授权环境查看？[y/N]：').lower() == 'y':
+                    cls.call('logs')
+            elif choice == '5':
+                audit('log-export','requested')
+                try:
+                    LogPrivacy.export()
+                except (BemanError,OSError,ValueError) as e:
+                    audit('log-export','failed')
+                    Console.say(str(e),'error')
+                else:
+                    audit('log-export','returned')
+            else:
+                Console.say('无效选项','warn')
+            Console.pause('按 Enter 返回日志管理…')
+
+    @classmethod
     def menu(cls):
         need(sys.stdin.isatty() and sys.stdout.isatty(),'非交互环境请指定命令，例如 beman status')
         try: cls.startup()
@@ -701,7 +861,7 @@ class Toolbox:
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  查看登录日志','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志管理','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
@@ -714,8 +874,8 @@ class Toolbox:
                     cls.whitelist()
                     continue
                 elif choice=='6':
-                    Console.clear()
-                    cls.call('logs')
+                    cls.logs_menu()
+                    continue
                 elif choice=='8':
                     Console.clear()
                     Console.title('卸载 BeMan')
@@ -884,7 +1044,7 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
         parser.add_argument('--version',action='version',version='BeMan '+DISPLAY_VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
@@ -899,6 +1059,9 @@ class Beman:
         if op=='stop': Console.title('停止防护'); cls.stop(); return
         if op=='uninstall': cls.uninstall(yes=args.yes); return
         if op=='status': cls.status(); return
+        if op in ('log-summary-ssh','log-summary-audit'):
+            LogPrivacy.report('ssh' if op=='log-summary-ssh' else 'beman'); return
+        if op=='log-status': LogPrivacy.status(); return
         if op=='logs':
             Console.title('SSH 登录日志')
             for line in run('journalctl','-u',SSH_SERVICE,'-n','50','--no-pager','--output=short-iso').stdout.splitlines():
@@ -927,7 +1090,7 @@ class Beman:
 if __name__=='__main__':
     try:
         op=sys.argv[1] if len(sys.argv)>1 else 'menu'
-        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init')
+        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status')
         if sensitive: audit(op,'requested')
         Beman.main()
         if sensitive: audit(op,'returned')

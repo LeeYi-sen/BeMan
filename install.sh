@@ -6,8 +6,8 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-BEMAN_VERSION="3.2"
-PYTHON_SHA256="81ebd89f0d49155d37d7135081140355bb7c5ef59e15c66428d3300f89fadb0e"
+BEMAN_VERSION="3.3"
+PYTHON_SHA256="a5eaa63c512a828985a52e04dffb9877717b7fe1366ee850b3930be35a37b5f2"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
