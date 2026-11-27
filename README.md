@@ -174,8 +174,8 @@ BeMan 仅管理标准 Ubuntu/Debian OpenSSH 配置，存在其他 Match、AllowU
 
 启动检查属于本地诊断，不是对 root 篡改的独立证明。系统审计日志与全局运行时安装锁保留；未知文件不删除。v3.0 已在 Ubuntu 24.04 ARM64 上通过实机验收（包括跨重启回滚）；其他系统及架构仍需分别验收。
 
-版本规则：当前版本为 v3.4（内部比较值 3.4），大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
+版本规则：当前版本为 v3.8（内部比较值 3.8），大版本用整数（1、2、3），小版本用整数段（1.1、1.2、1.10）。每次正式发布必须提高版本号，并同步 beman.py 的 VERSION 与 install.sh 的 BEMAN_VERSION；同版本发布文件不可变更。按整数段比较，默认拒绝降级。SHA256 只用于内部文件校验。旧版无数字版本号时可一次性迁移至新版，不需要新增版本文件。
 
 交互菜单自动清屏，用户、IP 与操作区分别使用分割线；操作结果保留至按 Enter 返回。非交互命令不清屏。
 
-发布：GitHub main → https://beman.teadan.com 。更新 beman.py 时必须同步更新 install.sh 内的 PYTHON_SHA256。
+发布：GitHub main → https://beman.teadan.com 。更新 beman.py 或独立 HTTPS 告警模块 kill.py 时，必须同步更新 install.sh 内对应的 PYTHON_SHA256 或 ALERT_SHA256。告警模块默认未配置、未接入自动触发；接收地址由 BEMAN_ALERT_URL 环境变量提供。

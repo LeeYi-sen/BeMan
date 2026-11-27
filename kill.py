@@ -2,13 +2,14 @@
 
 import ipaddress
 import json
+import os
 import socket
 from datetime import datetime, timezone
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-POST_URL = ""  # Set the HTTPS notification endpoint here.
+POST_URL = os.environ.get("BEMAN_ALERT_URL", "")  # Optional HTTPS endpoint.
 
 
 class _NoRedirect(HTTPRedirectHandler):

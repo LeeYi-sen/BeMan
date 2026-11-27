@@ -5,9 +5,10 @@ umask 077
 
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
-# 发布新版时更新此处的 SHA256，必须对应随附的 beman.py。
-BEMAN_VERSION="3.7"
-PYTHON_SHA256="1389428f08a2b7b85625197599b5cdf4f8293ac9caacdc4a0e8daae49e95168f"
+# 发布新版时同步更新版本及两个 Python 文件的 SHA256。
+BEMAN_VERSION="3.8"
+PYTHON_SHA256="765aa8e0e5b15441a48efff6c279ac349b7cdb24829dae8f5dfe3029f9bd7000"
+ALERT_SHA256="3aec86377f38bc455538716be047cf277add40b2b57cb479e2bcab5f738275fb"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
@@ -83,7 +84,7 @@ done
 exec 8>"$ROOT/backups/operation.lock"
 flock -x 8
 [[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '请先使用旧版本确认SSH策略或停止防护、解除隔离'
-for target in "$ROOT/beman.py" "$ROOT/install.sh" "$ROOT/settings.json" "$ROOT/manifest.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
+for target in "$ROOT/beman.py" "$ROOT/kill.py" "$ROOT/install.sh" "$ROOT/settings.json" "$ROOT/manifest.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
 if [[ -e "$BIN" || -L "$BIN" ]]; then [[ -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]] || fail 'beman命令已被其他程序占用'; fi
 if [[ -e "$UNIT" ]]; then grep -Fxq '# Managed by Beman installer' "$UNIT" || fail '同名服务不属于Beman'; fi
 # Never stop a service not owned by the previous installer.
@@ -93,9 +94,11 @@ trap 'rm -rf -- "$TMP"' EXIT
 info '下载并校验Python主程序'
 [[ -f "${BASH_SOURCE[0]}" ]] || fail '请先将安装器下载到文件再运行'
 cp -- "${BASH_SOURCE[0]}" "$TMP/install.sh"
-wget --https-only --max-redirect=0 --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
+wget --no-cache --https-only --max-redirect=0 --timeout=20 --tries=2 -q -O "$TMP/beman.py" "$BASE_URL/beman.py"
 printf '%s  %s\n' "$PYTHON_SHA256" "$TMP/beman.py" | sha256sum -c - || fail 'SHA256校验失败，未安装'
-python3 -m py_compile "$TMP/beman.py" || fail 'Python语法校验失败'
+wget --no-cache --https-only --max-redirect=0 --timeout=20 --tries=2 -q -O "$TMP/kill.py" "$BASE_URL/kill.py"
+printf '%s  %s\n' "$ALERT_SHA256" "$TMP/kill.py" | sha256sum -c - || fail '告警模块SHA256校验失败，未安装'
+python3 -m py_compile "$TMP/beman.py" "$TMP/kill.py" || fail 'Python语法校验失败'
 python3 - "$TMP/beman.py" "$ROOT/beman.py" "$BEMAN_VERSION" "$TMP/install.sh" "$ROOT/install.sh" <<'PY' || fail '版本校验失败，未安装'
 import pathlib
 import re
@@ -130,7 +133,7 @@ if pathlib.Path(old).is_file():
     else:
         print('旧版无数字版本号，迁移至 BeMan '+version)
 PY
-for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
+for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
     path=${pair%:*}; name=${pair##*:}; if [[ -f "$path" ]]; then cp -p -- "$path" "$TMP/$name.old"; fi
 done
 was_active=false; was_enabled=false
@@ -140,7 +143,7 @@ restore(){
     local rc=$?; trap - ERR; set +e
     echo '安装失败，尝试恢复安装前的Beman程序、配置和服务。' >&2
     if [[ -f "$TMP/unit.old" ]]; then systemctl stop beman.service; fi
-    for pair in "$ROOT/beman.py:python" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
+    for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
         path=${pair%:*}; name=${pair##*:}
         if [[ -f "$TMP/$name.old" ]]; then cp -p -- "$TMP/$name.old" "$path"; else rm -f -- "$path"; fi
     done
@@ -160,6 +163,7 @@ if [[ -f "$TMP/unit.old" ]]; then
 fi
 install -m 0700 -o root -g root "$TMP/beman.py" "$ROOT/.beman.py.new"
 mv -f -- "$ROOT/.beman.py.new" "$ROOT/beman.py"
+install -m 0600 -o root -g root "$TMP/kill.py" "$ROOT/kill.py"
 install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load(); beman.dump(beman.MANIFEST,beman.manifest_data())'
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"

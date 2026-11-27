@@ -24,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.7'
-DISPLAY_VERSION = 'v3.7'
+VERSION = '3.8'
+DISPLAY_VERSION = 'v3.8'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -44,12 +44,12 @@ MANIFEST = ROOT/'manifest.json'
 def manifest_data():
     # An inventory, not a user-editable list of paths to delete.
     return {'schema':1,'version':VERSION,
-            'files':['beman.py','install.sh','settings.json','manifest.json',
+            'files':['beman.py','kill.py','install.sh','settings.json','manifest.json',
                      'backups/operation.lock','backups/ssh-policy.json',
                      'backups/ssh-pending.json','backups/settings-before-simplification.json'],
             'external':[str(BIN),str(POLICY),str(UNIT_DIR/(ROLLBACK+'.service')),
                         str(UNIT_DIR/(ROLLBACK+'.timer')),str(ROLLBACK_STAMP)],
-            'legacy':['logs/beman.log','.beman.py.new','__pycache__/beman.*.pyc',
+            'legacy':['logs/beman.log','.beman.py.new','__pycache__/beman.*.pyc','__pycache__/kill.*.pyc',
                       str(UNIT_DIR/'beman.service')],
             'retained':['system packages','system journal','global runtime install lock']}
 
@@ -98,7 +98,7 @@ def integrity_issues():
     # Diagnostic only: never prevent the administrator from stopping protection.
     issues=[]
     entries=[(ROOT,True,True),(STATE,True,True),(SELF,False,True),
-             (ROOT/'install.sh',False,True),(SETTINGS,False,True),(MANIFEST,False,True),
+             (ROOT/'install.sh',False,True),(ROOT/'kill.py',False,True),(SETTINGS,False,True),(MANIFEST,False,True),
              (STATE/'operation.lock',False,False),(SSHGuard.META,False,False),
              (SSHGuard.PENDING,False,False),(POLICY,False,False)]
     for path,directory,required in entries:
@@ -117,6 +117,9 @@ def integrity_issues():
         matches=re.findall(rb'^PYTHON_SHA256="([a-f0-9]{64})"$',installer,re.M)
         if len(matches)!=1 or hashlib.sha256(SELF.read_bytes()).hexdigest().encode()!=matches[0]:
             issues.append('本地主程序与安装器SHA256不一致')
+        alert_matches=re.findall(rb'^ALERT_SHA256="([a-f0-9]{64})"$',installer,re.M)
+        if len(alert_matches)!=1 or hashlib.sha256((ROOT/'kill.py').read_bytes()).hexdigest().encode()!=alert_matches[0]:
+            issues.append('本地告警模块与安装器SHA256不一致')
         if Release.declared_version(installer,True)!=VERSION or Release.declared_version(SELF.read_bytes())!=VERSION:
             issues.append('本地版本声明不一致')
     except (BemanError,OSError,ValueError):
@@ -894,7 +897,7 @@ class StrangerHook:
 
 class CacheMaintenance:
     """Maintain only reproducible BeMan Python build cache."""
-    CACHE_NAME = re.compile(r'beman\.cpython-\d{2,3}(?:\.opt-[12])?\.pyc')
+    CACHE_NAME = re.compile(r'(?:beman|kill)\.cpython-\d{2,3}(?:\.opt-[12])?\.pyc')
 
     @staticmethod
     def trusted(st):
@@ -1272,8 +1275,8 @@ class Beman:
                         need(not path.is_symlink() and path.is_file() and path.lstat().st_uid==0,'自动 ls 钩子文件异常，拒绝卸载：'+str(path))
                 if StrangerHook.SCRIPT.exists():
                     need(StrangerHook.SCRIPT.read_text().startswith('# Managed by BeMan'),'同名钩子不属于BeMan，拒绝卸载')
-                files=[ROOT/'install.sh',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new',StrangerHook.SCRIPT,StrangerHook.WHITELIST]
-                if cache.is_dir(): files.extend(cache.glob('beman.*.pyc'))
+                files=[ROOT/'install.sh',ROOT/'kill.py',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new',StrangerHook.SCRIPT,StrangerHook.WHITELIST]
+                if cache.is_dir(): files.extend(p for p in cache.iterdir() if CacheMaintenance.CACHE_NAME.fullmatch(p.name))
                 for path in files:
                     need(not path.is_symlink() and (not path.exists() or path.is_file()),'文件异常：'+str(path))
                 # Restore only our managed SSH rules. Failure aborts before deleting the program.
