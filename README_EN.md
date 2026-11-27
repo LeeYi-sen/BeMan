@@ -33,7 +33,7 @@ Non-root users can run `sudo beman`. Preserve SSH_CONNECTION when starting or co
 | 3 | Restart protection |
 | 4 | Show status |
 | 5 | Manage allowlist |
-| 6 | Log management |
+| 6 | Log cleanup |
 | 7 | Check for updates (install newer releases automatically) |
 | 8 | Uninstall BeMan (keep SSH) |
 | 0 | Exit |
@@ -55,7 +55,7 @@ Shortcut commands:
 
 For initial activation or changed rules, keep the old session open. Establish a **new public-key SSH session** from an allowed IP using an allowed user, and run start again to confirm. The fixed 300-second timeout attempts rollback if not confirmed. Do not rely on the timer as your only recovery channel or reboot before confirmation. If login fails, run stop from the old session or local console. Stopping does not override other system access restrictions or disconnect existing SSH sessions.
 
-### Log management (item 6)
+### Log cleanup (item 6)
 
 | Submenu | Function |
 | --- | --- |
@@ -75,7 +75,7 @@ Encrypted export contains summary counts only and uses an existing GnuPG install
 
 #### Program cache maintenance
 
-Select log-management item 6 or run `sudo beman clean-cache`. The tool checks only reproducible Python bytecode cache in the BeMan installation, previews file count and size, and requests confirmation. Personal directories, logs, login and command history, configuration, backups, and SSH state are untouched. Unknown files are retained. Unexpected file types or permissions block cleanup, and the operation remains auditable. Python can regenerate bytecode; the cache is typically small or absent.
+Select log-cleanup item 6 or run `sudo beman clean-cache`. The tool checks only reproducible Python bytecode cache in the BeMan installation, previews file count and size, and requests confirmation. Personal directories, logs, login and command history, configuration, backups, and SSH state are untouched. Unknown files are retained. Unexpected file types or permissions block cleanup, and the operation remains auditable. Python can regenerate bytecode; the cache is typically small or absent.
 
 ### SSH public-key login
 
@@ -156,7 +156,7 @@ BeMan manages standard Ubuntu/Debian OpenSSH configurations. Existing Match, All
 
 Startup checks are local diagnostics, not independent proof against root tampering. System audit logs and the global runtime install lock are retained; unknown files are not deleted. v3.0 passed real Ubuntu 24.04 ARM64 acceptance, including rollback across reboot; other systems and architectures require separate validation.
 
-Versioning: the current release is v3.8 (internal comparison value 3.8). Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata for both beman.py and the standalone HTTPS notification module kill.py. The latter has no automatic trigger; BEMAN_ALERT_URL supplies the optional endpoint. Legacy installations without a numeric version can migrate once; no extra version file is needed.
+Versioning: the current release is v3.9 (internal comparison value 3.9). Major versions are integers (1, 2, 3); minor versions use integer components (1.1, 1.2, 1.10). Increment the version for every release, keeping VERSION in beman.py and BEMAN_VERSION in install.sh identical. Release contents are immutable for a given version. Compare integer components and reject downgrades by default. SHA256 is internal integrity metadata for both beman.py and the standalone HTTPS notification module kill.py. The latter has no automatic trigger; BEMAN_ALERT_URL supplies the optional endpoint. Legacy installations without a numeric version can migrate once; no extra version file is needed.
 
 Interactive menus clear the terminal and separate user, IP and action sections. Operation results remain visible until Enter is pressed. Non-interactive commands do not clear the terminal.
 

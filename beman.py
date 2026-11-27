@@ -24,8 +24,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-VERSION = '3.8'
-DISPLAY_VERSION = 'v3.8'
+VERSION = '3.9'
+DISPLAY_VERSION = 'v3.9'
 ROOT = Path('/opt/beman')
 SETTINGS = ROOT / 'settings.json'
 STATE = ROOT / 'backups'
@@ -700,201 +700,6 @@ class LogPrivacy:
         Console.say('加密摘要已保存（0600）；由管理员自行保管，卸载不会删除。', 'ok')
 
 
-class StrangerWatch:
-    """只读巡检非白名单登录；对每个陌生会话按固定参数执行一次 ls 记录现场。
-
-    不写入任何终端，不改变会话权限，不删除记录。
-    """
-    LIMIT = 200
-    ACCEPTED = re.compile(r'^Accepted (\S+(?:/\S+)?) for (\S+) from (\S+) port (\d+)')
-    LS_MAX_LINES = 40
-
-    @classmethod
-    def entries(cls):
-        result = run('journalctl', '-u', SSH_SERVICE, '-n', str(cls.LIMIT),
-                     '--no-pager', '--output=json', check=False)
-        need(result.returncode == 0, '无法读取 SSH 日志，请检查系统日志服务及权限')
-        out = []
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(entry, dict):
-                continue
-            message = entry.get('MESSAGE', '')
-            if not isinstance(message, str):
-                continue
-            match = cls.ACCEPTED.match(message)
-            if not match:
-                continue
-            out.append({'method': match[1], 'user': match[2], 'ip': match[3],
-                        'port': int(match[4]), 'stamp': cls.stamp(entry)})
-        return out
-
-    @staticmethod
-    def stamp(entry):
-        try:
-            return datetime.datetime.fromtimestamp(int(entry['__REALTIME_TIMESTAMP']) / 1e6).strftime('%m-%d %H:%M:%S')
-        except (KeyError, TypeError, ValueError, OverflowError, OSError):
-            return '未知时间'
-
-    @classmethod
-    def strangers(cls, entries, config):
-        users, allowed = set(config['allowed_users']), set(config['allowed_ips'])
-        found = []
-        for entry in entries:
-            reasons = []
-            if entry['user'] not in users:
-                reasons.append('用户不在白名单')
-            if entry['ip'] not in allowed:
-                reasons.append('IP 不在白名单')
-            if reasons:
-                found.append(dict(entry, reason='、'.join(reasons)))
-        return found
-
-    @classmethod
-    def listing(cls, user):
-        # 固定参数、固定目录、不经 shell；仅用于管理员核对现场，不回显给登录方。
-        try:
-            home = pwd.getpwnam(user).pw_dir
-        except KeyError:
-            home = '/root'
-        result = run('ls', '-la', '--', home, check=False, timeout=10)
-        if result.returncode:
-            return home, f'ls 执行失败（退出码 {result.returncode}）'
-        lines = result.stdout.splitlines()
-        body = '\n'.join(lines[:cls.LS_MAX_LINES])
-        if len(lines) > cls.LS_MAX_LINES:
-            body += f'\n… 其余 {len(lines) - cls.LS_MAX_LINES} 行未显示'
-        return home, body
-
-    @classmethod
-    def report(cls):
-        Console.title('陌生登录巡检')
-        with locked():
-            config = ConfigManager.load()
-        entries = cls.entries()
-        found = cls.strangers(entries, config)
-        Console.result('扫描登录', f'最近 {len(entries)} 条成功登录，其中非白名单 {len(found)} 条',
-                       'warn' if found else 'ok')
-        if not found:
-            Console.say('未发现非白名单登录。', 'ok')
-            return
-        print(f'{"时间":<15}{"用户":<12}{"来源 IP":<18}{"方式":<20}判定')
-        Console.divider()
-        for entry in found:
-            print(f'{entry["stamp"]:<15}{entry["user"]:<12}{entry["ip"]:<18}'
-                  f'{entry["method"]:<20}{entry["reason"]}')
-        Console.divider()
-        seen = []
-        for entry in found:
-            if entry['user'] in seen:
-                continue
-            seen.append(entry['user'])
-            home, body = cls.listing(entry['user'])
-            print(Console.color(f'[{entry["user"]}] ls -la {home}', '36'))
-            print(body)
-            Console.divider()
-        Console.say('以上仅为管理员侧现场记录；ls 不改变会话权限，也不会阻止对方操作。', 'warn')
-
-
-class StrangerHook:
-    """非白名单登录时自动执行一次 ls：/etc/profile.d 钩子，以登录用户身份运行。
-
-    不修改 PAM 或 sshd 规则，因此不会造成登录锁死；脚本在子 shell 中执行，
-    任何失败都不影响用户会话。默认不启用。
-    """
-    SCRIPT = Path('/etc/profile.d/beman-stranger.sh')
-    WHITELIST = ROOT / 'whitelist.txt'
-    NOTE = '在该用户自己的终端回显一行 user@host:~$ ls 并显示结果，同时记一条 authpriv 审计；不限制权限，不断开会话。'
-
-    BODY = r'''#!/bin/bash
-# Managed by BeMan
-# 非白名单 SSH 登录时显示一次目录列表；由 beman 生成，请勿手工修改。
-# 停止：sudo beman stranger-hook-off
-(
-    [ -n "${SSH_CONNECTION:-}" ] || exit 0
-    [ -r /opt/beman/whitelist.txt ] || exit 0
-    beman_ip="${SSH_CONNECTION%% *}"
-    beman_user="${USER:-$(id -un 2>/dev/null)}"
-    beman_ok_user=0
-    beman_ok_ip=0
-    while read -r beman_kind beman_value; do
-        [ "$beman_kind" = user ] && [ "$beman_value" = "$beman_user" ] && beman_ok_user=1
-        [ "$beman_kind" = ip ] && [ "$beman_value" = "$beman_ip" ] && beman_ok_ip=1
-    done < /opt/beman/whitelist.txt
-    [ "$beman_ok_user" = 1 ] && [ "$beman_ok_ip" = 1 ] && exit 0
-    if command -v logger >/dev/null 2>&1; then
-        logger -p authpriv.notice -t beman-stranger \
-            "unexpected_login user=$beman_user ip=$beman_ip" 2>/dev/null
-    fi
-    beman_host=$(hostname -s 2>/dev/null || cat /etc/hostname 2>/dev/null)
-    [ -n "$beman_host" ] || beman_host=localhost
-    if [ "$(id -u 2>/dev/null)" = 0 ]; then beman_mark='#'; else beman_mark='$'; fi
-    printf '\n%s@%s:~%s ls\n' "$beman_user" "$beman_host" "$beman_mark"
-    ls -la -- "${HOME:-/}" 2>/dev/null | head -40
-    printf '\n'
-) </dev/null || true
-'''
-
-    @classmethod
-    def sync(cls, config):
-        lines = [f'user {u}' for u in config['allowed_users']]
-        lines += [f'ip {ip}' for ip in config['allowed_ips']]
-        atomic(cls.WHITELIST, '\n'.join(lines) + '\n', 0o644)
-
-    @classmethod
-    def install(cls):
-        with locked():
-            cls.sync(ConfigManager.load())
-            atomic(cls.SCRIPT, cls.BODY, 0o644)
-        Console.say('已启用：非白名单登录将自动执行一次 ls', 'ok')
-        Console.say(cls.NOTE, 'warn')
-        audit('stranger-hook', 'success')
-
-    @classmethod
-    def remove(cls):
-        removed = []
-        for path in (cls.SCRIPT, cls.WHITELIST):
-            try:
-                path.unlink()
-                removed.append(path)
-            except FileNotFoundError:
-                pass
-        Console.say('已停止' if removed else '未启用', 'ok')
-        for path in removed:
-            print('  删除 ' + str(path))
-        audit('stranger-hook-off', 'success' if removed else 'noop')
-
-    @classmethod
-    def status(cls):
-        Console.title('陌生登录自动 ls')
-        if not cls.SCRIPT.exists():
-            Console.say('未启用', 'warn')
-            print('启用：sudo beman stranger-hook-on')
-            return
-        info = cls.SCRIPT.stat()
-        print(f'{cls.SCRIPT}：权限 {stat.S_IMODE(info.st_mode):04o} / UID {info.st_uid}')
-        try:
-            same = cls.SCRIPT.read_text() == cls.BODY
-            print('内容校验：' + ('与 BeMan 生成版本一致' if same else '与当前版本不一致，执行 sudo beman stranger-hook-on 刷新'))
-        except OSError as e:
-            print('无法读取：' + str(e))
-        try:
-            with locked():
-                config = ConfigManager.load()
-            expected = '\n'.join([f'user {u}' for u in config['allowed_users']] +
-                                 [f'ip {ip}' for ip in config['allowed_ips']]) + '\n'
-            actual = cls.WHITELIST.read_text() if cls.WHITELIST.exists() else ''
-            print('白名单快照：' + ('最新' if actual == expected else '已过期，执行 sudo beman start 刷新'))
-        except (BemanError, OSError, ValueError, KeyError):
-            print('白名单快照：无法核对')
-        print('作用范围：仅在该用户终端显示目录列表；不限制权限、不断开会话、不删除记录。')
-
-
 class CacheMaintenance:
     """Maintain only reproducible BeMan Python build cache."""
     CACHE_NAME = re.compile(r'(?:beman|kill)\.cpython-\d{2,3}(?:\.opt-[12])?\.pyc')
@@ -1069,11 +874,6 @@ class Toolbox:
                     for k,v in c.items(): data[k]['value']=v
                     old=SSHGuard.owned()
                     atomic(SETTINGS,ConfigManager.format(data)+'\n')
-                if StrangerHook.SCRIPT.exists():
-                    try:
-                        StrangerHook.sync(c)
-                    except OSError:
-                        pass
                 Console.say('白名单已保存','ok')
                 audit('allowlist-change','success')
                 if old is not None: Console.say('选择重启防护应用新规则，并从新SSH会话确认','warn')
@@ -1083,50 +883,10 @@ class Toolbox:
             Console.pause('按 Enter 返回白名单管理…')
 
     @classmethod
-    def stranger_menu(cls):
-        while True:
-            Console.clear()
-            Console.title('陌生登录巡检')
-            for label, color in [('[1] 立即巡检（读取日志并执行一次 ls）','34'),
-                                 ('[2] 启用自动 ls（非白名单登录时触发）','33'),
-                                 ('[3] 停止自动 ls','31'),
-                                 ('[4] 自动 ls 状态','34'),
-                                 ('[0] 返回主菜单','90')]:
-                print(Console.color(label, color))
-            Console.divider()
-            try:
-                choice = Console.ask('请选择 [0-4]：')
-                if choice == '0':
-                    return
-                if choice == '1':
-                    Console.clear()
-                    cls.call('stranger')
-                elif choice == '2':
-                    Console.clear()
-                    Console.say('启用后，非白名单用户/IP 登录会在其终端显示一次目录列表。', 'warn')
-                    Console.say(StrangerHook.NOTE, 'warn')
-                    if Console.ask('确认启用？[y/N]：').lower() == 'y':
-                        cls.call('stranger-hook-on')
-                    else:
-                        continue
-                elif choice == '3':
-                    Console.clear()
-                    cls.call('stranger-hook-off')
-                elif choice == '4':
-                    Console.clear()
-                    cls.call('stranger-hook-status')
-                else:
-                    Console.say('无效选项', 'warn')
-                Console.pause()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return
-
-    @classmethod
     def logs_menu(cls):
         while True:
             Console.clear()
-            Console.title('日志管理')
+            Console.title('日志清理')
             for label, color in [('[1] SSH 登录统计（脱敏）','34'),
                                  ('[2] BeMan 审计统计（脱敏）','34'),
                                  ('[3] 查看原始 SSH 及 BeMan 日志','34'),
@@ -1158,7 +918,7 @@ class Toolbox:
                 cls.call('clean-cache')
             else:
                 Console.say('无效选项','warn')
-            Console.pause('按 Enter 返回日志管理…')
+            Console.pause('按 Enter 返回日志清理…')
 
     @classmethod
     def menu(cls):
@@ -1170,11 +930,11 @@ class Toolbox:
             state,code=Beman.summary()
             print('\n'+Console.color('BeMan '+DISPLAY_VERSION,'1;36')+'  /  '+Console.color(state,code))
             Console.divider()
-            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志管理','34'),('7  陌生登录巡检','34'),('8  检查更新','34'),('9  一键卸载 BeMan','31'),('0  退出','90')]:
+            for label,code in [('1  启动 / 确认防护','32'),('2  停止防护','31'),('3  重启防护','33'),('4  查看状态','34'),('5  白名单管理','34'),('6  日志清理','34'),('7  检查更新','34'),('8  一键卸载 BeMan','31'),('0  退出','90')]:
                 print(Console.color('['+label[0]+']'+label[1:],code))
             Console.divider()
             try:
-                choice=Console.ask('请选择 [0-9]：')
+                choice=Console.ask('请选择 [0-8]：')
                 if choice=='0': return
                 if choice in ('1','2','3','4'):
                     Console.clear()
@@ -1185,16 +945,13 @@ class Toolbox:
                 elif choice=='6':
                     cls.logs_menu()
                     continue
-                elif choice=='7':
-                    cls.stranger_menu()
-                    continue
-                elif choice=='9':
+                elif choice=='8':
                     Console.clear()
                     Console.title('卸载 BeMan')
                     if Console.ask('确认撤销防护并删除 BeMan 程序、配置及自身备份？SSH 服务和系统依赖保留。[y/N]：').lower()=='y':
                         if cls.call('uninstall','--yes'): return
                     else: continue
-                elif choice=='8':
+                elif choice=='7':
                     cls.update_menu()
                 else: Console.say('无效选项','warn')
                 Console.pause()
@@ -1212,11 +969,6 @@ class Beman:
         with locked():
             c=ConfigManager.load()
             Console.say('白名单配置校验通过','ok')
-            if StrangerHook.SCRIPT.exists():
-                try:
-                    StrangerHook.sync(c)
-                except OSError:
-                    Console.say('白名单快照刷新失败，自动 ls 可能沿用旧名单','warn')
             old=SSHGuard.owned(); candidate=SSHGuard.candidate(c)
             if SSHGuard.PENDING.exists():
                 need(old==candidate,'待确认期间配置已变化，请先停止防护')
@@ -1269,13 +1021,7 @@ class Beman:
                 logs=ROOT/'logs'; cache=ROOT/'__pycache__'
                 for directory in (logs,cache):
                     need(not directory.is_symlink() and (not directory.exists() or directory.is_dir()),'目录异常：'+str(directory))
-                # Optional auto-ls hook lives outside ROOT; remove only our generated copy.
-                for path in (StrangerHook.SCRIPT,StrangerHook.WHITELIST):
-                    if path.exists() or path.is_symlink():
-                        need(not path.is_symlink() and path.is_file() and path.lstat().st_uid==0,'自动 ls 钩子文件异常，拒绝卸载：'+str(path))
-                if StrangerHook.SCRIPT.exists():
-                    need(StrangerHook.SCRIPT.read_text().startswith('# Managed by BeMan'),'同名钩子不属于BeMan，拒绝卸载')
-                files=[ROOT/'install.sh',ROOT/'kill.py',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new',StrangerHook.SCRIPT,StrangerHook.WHITELIST]
+                files=[ROOT/'install.sh',ROOT/'kill.py',SETTINGS,MANIFEST,STATE/'settings-before-simplification.json',STATE/'operation.lock',SSHGuard.META,SSHGuard.PENDING,logs/'beman.log',ROOT/'.beman.py.new']
                 if cache.is_dir(): files.extend(p for p in cache.iterdir() if CacheMaintenance.CACHE_NAME.fullmatch(p.name))
                 for path in files:
                     need(not path.is_symlink() and (not path.exists() or path.is_file()),'文件异常：'+str(path))
@@ -1367,7 +1113,7 @@ class Beman:
     @classmethod
     def main(cls):
         parser=argparse.ArgumentParser(description='BeMan SSH 安全管理')
-        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','stranger','stranger-hook-on','stranger-hook-off','stranger-hook-status','clean-cache','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
+        parser.add_argument('operation',nargs='?',default='menu',choices=['menu','start','stop','restart','status','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache','check-update','update','version','init','check','confirm','rollback','rollback-pending','apply','reload','uninstall'])
         parser.add_argument('--version',action='version',version='BeMan '+DISPLAY_VERSION)
         parser.add_argument('--rollback-token',default='')
         parser.add_argument('--yes',action='store_true',help='明确确认卸载')
@@ -1385,10 +1131,6 @@ class Beman:
         if op in ('log-summary-ssh','log-summary-audit'):
             LogPrivacy.report('ssh' if op=='log-summary-ssh' else 'beman'); return
         if op=='log-status': LogPrivacy.status(); return
-        if op=='stranger': StrangerWatch.report(); return
-        if op=='stranger-hook-on': StrangerHook.install(); return
-        if op=='stranger-hook-off': StrangerHook.remove(); return
-        if op=='stranger-hook-status': StrangerHook.status(); return
         if op=='clean-cache': CacheMaintenance.clean(); return
         if op=='logs':
             Console.title('SSH 登录日志')
@@ -1418,7 +1160,7 @@ class Beman:
 if __name__=='__main__':
     try:
         op=sys.argv[1] if len(sys.argv)>1 else 'menu'
-        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status','stranger','stranger-hook-on','stranger-hook-off','stranger-hook-status','clean-cache')
+        sensitive=op in ('start','stop','restart','confirm','rollback','rollback-pending','apply','reload','uninstall','update','init','logs','audit','log-summary-ssh','log-summary-audit','log-status','clean-cache')
         if sensitive: audit(op,'requested')
         Beman.main()
         if sensitive: audit(op,'returned')

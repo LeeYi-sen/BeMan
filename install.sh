@@ -6,12 +6,14 @@ umask 077
 # 官方发布地址；可通过 BEMAN_BASE_URL 或命令行参数覆盖。
 BASE_URL="${BEMAN_BASE_URL:-https://beman.teadan.com}"
 # 发布新版时同步更新版本及两个 Python 文件的 SHA256。
-BEMAN_VERSION="3.8"
-PYTHON_SHA256="765aa8e0e5b15441a48efff6c279ac349b7cdb24829dae8f5dfe3029f9bd7000"
+BEMAN_VERSION="3.9"
+PYTHON_SHA256="29983b1e6392584fc6bc9f408101fb049ed8f0554f6f6f8ddee5b2f7bcef1e9f"
 ALERT_SHA256="3aec86377f38bc455538716be047cf277add40b2b57cb479e2bcab5f738275fb"
 ROOT=/opt/beman
 UNIT=/etc/systemd/system/beman.service
 BIN=/usr/local/bin/beman
+LEGACY_HOOK=/etc/profile.d/beman-stranger.sh
+LEGACY_ALLOWLIST="$ROOT/whitelist.txt"
 RED='' GREEN='' CYAN='' RESET=''
 if [[ -t 1 && "${TERM:-}" != dumb && -z "${NO_COLOR+x}" ]]; then RED=$'\033[31m'; GREEN=$'\033[32m'; CYAN=$'\033[36m'; RESET=$'\033[0m'; fi
 info(){ printf '%s[INFO]%s %s\n' "$CYAN" "$RESET" "$*"; }
@@ -85,6 +87,18 @@ exec 8>"$ROOT/backups/operation.lock"
 flock -x 8
 [[ ! -e "$ROOT/backups/ssh-pending.json" && ! -e "$ROOT/backups/network-owned.json" ]] || fail '请先使用旧版本确认SSH策略或停止防护、解除隔离'
 for target in "$ROOT/beman.py" "$ROOT/kill.py" "$ROOT/install.sh" "$ROOT/settings.json" "$ROOT/manifest.json" "$UNIT"; do [[ ! -L "$target" ]] || fail "拒绝符号链接：$target"; done
+# Retire only the previous BeMan-owned hook and its generated allowlist snapshot.
+for target in "$LEGACY_HOOK" "$LEGACY_ALLOWLIST"; do
+    if [[ -e "$target" || -L "$target" ]]; then
+        [[ -f "$target" && ! -L "$target" && -O "$target" ]] || fail "旧版巡检文件异常：$target"
+    fi
+done
+if [[ -f "$LEGACY_HOOK" ]]; then
+    grep -Fxq '# Managed by BeMan' "$LEGACY_HOOK" || fail '同名巡检脚本不属于 BeMan'
+fi
+if [[ -f "$LEGACY_ALLOWLIST" ]]; then
+    if grep -Eqv '^(user|ip) [^[:space:]]+$' "$LEGACY_ALLOWLIST"; then fail '旧版白名单快照格式异常'; fi
+fi
 if [[ -e "$BIN" || -L "$BIN" ]]; then [[ -L "$BIN" && $(readlink "$BIN") == "$ROOT/beman.py" ]] || fail 'beman命令已被其他程序占用'; fi
 if [[ -e "$UNIT" ]]; then grep -Fxq '# Managed by Beman installer' "$UNIT" || fail '同名服务不属于Beman'; fi
 # Never stop a service not owned by the previous installer.
@@ -133,7 +147,7 @@ if pathlib.Path(old).is_file():
     else:
         print('旧版无数字版本号，迁移至 BeMan '+version)
 PY
-for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
+for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit" "$LEGACY_HOOK:legacy-hook" "$LEGACY_ALLOWLIST:legacy-allowlist"; do
     path=${pair%:*}; name=${pair##*:}; if [[ -f "$path" ]]; then cp -p -- "$path" "$TMP/$name.old"; fi
 done
 was_active=false; was_enabled=false
@@ -143,7 +157,7 @@ restore(){
     local rc=$?; trap - ERR; set +e
     echo '安装失败，尝试恢复安装前的Beman程序、配置和服务。' >&2
     if [[ -f "$TMP/unit.old" ]]; then systemctl stop beman.service; fi
-    for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit"; do
+    for pair in "$ROOT/beman.py:python" "$ROOT/kill.py:alert" "$ROOT/install.sh:installer" "$ROOT/settings.json:settings" "$ROOT/manifest.json:manifest" "$UNIT:unit" "$LEGACY_HOOK:legacy-hook" "$LEGACY_ALLOWLIST:legacy-allowlist"; do
         path=${pair%:*}; name=${pair##*:}
         if [[ -f "$TMP/$name.old" ]]; then cp -p -- "$TMP/$name.old" "$path"; else rm -f -- "$path"; fi
     done
@@ -168,6 +182,7 @@ install -m 0700 -o root -g root "$TMP/install.sh" "$ROOT/install.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; beman.ConfigManager.init(); beman.ConfigManager.load(); beman.dump(beman.MANIFEST,beman.manifest_data())'
 [[ -L "$BIN" ]] || ln -s "$ROOT/beman.py" "$BIN"
 PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys; sys.path.insert(0,"/opt/beman"); import beman; problems=beman.dependency_issues(); beman.need(not problems,"；".join(problems))'
+rm -f -- "$LEGACY_HOOK" "$LEGACY_ALLOWLIST"
 trap - ERR
 ok "BeMan v$BEMAN_VERSION 已安装/升级：$ROOT"
 info '输入 beman 打开 SSH 管理工具箱；选择检查更新按需升级'
