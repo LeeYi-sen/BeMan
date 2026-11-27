@@ -49,6 +49,9 @@ beman
 | `beman audit` | 查看 BeMan 操作审计日志 |
 | `beman logs` | 读取最近 50 条 SSH 系统日志 |
 | `beman stranger` | 巡检非白名单登录，并按固定参数执行一次 `ls` 记录现场 |
+| `beman stranger-hook-on` | 启用自动 `ls`：非白名单登录时触发 |
+| `beman stranger-hook-off` | 停止自动 `ls` 并删除钩子 |
+| `beman stranger-hook-status` | 查看自动 `ls` 状态与白名单快照 |
 | `beman check-update` | 检测版本，不安装 |
 | `beman update` | 检测并升级 |
 | `beman version` | 查看版本号（也支持 `beman --version`） |
@@ -61,6 +64,14 @@ beman
 仅读取最近 200 条成功登录记录，与 `settings.json` 的用户白名单和 IP 白名单比对。命中非白名单的会话会列出时间、用户、来源 IP、认证方式和判定原因，并对该用户在个人主目录执行一次固定参数 `ls -la`（不经 shell、目录取自 `pwd` 记录），输出最多 40 行，供管理员核对现场。
 
 该操作只读：不改变会话权限，不向任何终端写入内容，不删除或截断日志，也不会阻止对方继续操作。判定依赖精确 IP 比对，网络出口变化（如更换宽带、运营商 NAT、IPv6 前缀轮换）会产生误报，需人工确认。`ls` 只能反映目录条目名称与属性，无法说明登录者做过什么；要还原行为应使用 `beman logs`、`beman audit` 与系统审计工具。
+
+### 自动 ls（可选，默认关闭）
+
+`sudo beman stranger-hook-on` 会在 `/etc/profile.d/beman-stranger.sh` 写入一个托管脚本，并生成 `/opt/beman/whitelist.txt`（0644，仅含用户名与 IP，不含密钥）。非白名单 SSH 登录时，该脚本在该用户自己的终端执行一次 `ls -la $HOME`（最多 40 行），并写入一条 `authpriv.notice` 系统日志，标签 `beman-stranger`。
+
+设计边界：不修改 PAM 和 sshd 规则，因此不会造成登录锁死；脚本整体在子 shell 中执行，任何异常都不影响会话；仅在交互式 SSH 登录时触发，非 SSH 会话与自动化任务不触发。白名单快照在 `beman start` 和白名单保存时刷新，可用 `beman stranger-hook-status` 检查是否过期。
+
+局限：输出显示在对方终端，等于告知对方已被识别，可能促使其立即转向其他目标或清理现场；`ls` 不限制权限、不断开会话、不隐藏任何内容。若目标是阻断而非提示，应使用出站收敛与凭据隔离，而不是本功能。
 
 ### 日志管理（第 6 项）
 
